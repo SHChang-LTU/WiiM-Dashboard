@@ -35,19 +35,64 @@ Returns identity + capabilities. Fields this app reads:
 | Purpose | Command |
 |---|---|
 | Status (extended) | `getPlayerStatusEx` |
-| Metadata (art, rate) | `getMetaInfo` → `metaData.{albumArtURI,sampleRate,bitDepth,bitRate,title,artist,album}` |
+| Metadata (art, rate) | `getMetaInfo` → `metaData.{…}` (see below) |
 | Resume / Pause / Toggle | `setPlayerCmd:resume` / `:pause` / `:onepause` |
 | Next / Prev / Stop | `setPlayerCmd:next` / `:prev` / `:stop` |
 | Seek (seconds) | `setPlayerCmd:seek:<s>` |
 | Volume (0–100) | `setPlayerCmd:vol:<n>` |
 | Mute | `setPlayerCmd:mute:<0\|1>` |
-| Loop/shuffle | `setPlayerCmd:loopmode:<n>` |
+| Loop/shuffle | `setPlayerCmd:loopmode:<n>` (see below) |
 
-`getPlayerStatusEx` notes: `status` = `play|pause|stop|load`; `Title`/`Artist`/`Album` are **hex-encoded UTF-8**; `curpos`/`totlen` are ms; `mode` = numeric source; `vol`, `mute`, `eq`, `loop`.
+`getPlayerStatusEx` notes: `status` = `play|pause|stop|load`; `Title`/`Artist`/`Album` are **hex-encoded UTF-8** (and may contain HTML entities such as `&amp;`, which the app decodes); `curpos`/`totlen` are ms; `mode` = numeric source; `vol`, `mute`, `eq`, `loop`.
+
+### `getMetaInfo` → `metaData`
+
+Fields read: `album`, `title`, `subtitle`, `artist`, `albumArtURI`, `sampleRate`, `bitDepth`, `bitRate`, `trackId`. All values are strings.
+
+- There is **no codec/format field** and **no vendor field** anywhere in the WiiM API. The playing service is derived from `mode` (see below) and the codec is **inferred** from the service + quality tier.
+- `bitRate` and `trackId` are often the literal string `"unknow"` (sic), and `bitRate` may be reported in bps or kbps depending on firmware.
+- The device reports a **decoded PCM `bitDepth`** (e.g. `16`) even for lossy streams, so bit-depth alone cannot tell lossy from lossless — `bitRate` is the reliable signal (a 320 kbps OGG still reports 16-bit).
+
+### Loop / shuffle (`loop` read vs `loopmode` write)
+
+The **read** field `loop` (from `getPlayerStatusEx`) and the **write** command `setPlayerCmd:loopmode` use **different, asymmetric** tables on current WiiM firmware:
+
+| `loop` (read) | Meaning |
+|---|---|
+| `0` | loop all → repeat all |
+| `1` | single loop → repeat one |
+| `2` | shuffle loop → shuffle + repeat all |
+| `3` | shuffle, no loop → shuffle, no repeat |
+| `4` | no shuffle, no loop → off (default) |
+
+| `loopmode` (write, documented `{-1,0,1,2}`) | Effect |
+|---|---|
+| `0` | off (reads back as `4`) |
+| `1` | repeat one |
+| `2` | shuffle (shuffle + repeat all) |
+| `-1` | repeat all (reads back as `0`) |
+
+The older python-linkplay / Home-Assistant loop-mode enum was written against older LinkPlay firmware and **mis-maps these on current WiiM units** (e.g. it would set Repeat-One when asked for Repeat-All).
 
 ### Playing-mode (`mode`) → source
 
 `10/20…` network/streaming · `1` AirPlay · `2` DLNA · `31` Spotify · `32` TIDAL · `40` line-in · `41` Bluetooth · `43` optical · `45` coaxial · `49` HDMI · `51` USB-DAC · `54` phono · `58` HDMI ARC … (full map in `constants.ts`). Streaming modes are treated as the "Network/WiFi" source.
+
+#### `mode` → streaming service
+
+Because there is no vendor field, the now-playing **service** is derived from `mode`. Connect / cast / protocol sessions have dedicated codes:
+
+| `mode` | Service |
+|---|---|
+| `1` | AirPlay |
+| `2` | DLNA |
+| `3` | QPlay |
+| `31` | Spotify Connect |
+| `32` | TIDAL Connect |
+| `36` | Qobuz Connect |
+| `41` | Bluetooth |
+
+Generic in-app network streaming is **mode `10`/`20`** (and a few neighbours) — there's no dedicated code, so the service is guessed by sniffing the `albumArtURI` host (tidal / qobuz / deezer / amazon / spotify / soundcloud / youtubemusic / tunein).
 
 ## EQ
 
@@ -109,3 +154,8 @@ Official: `wifi`, `line-in`, `bluetooth`, `optical`, `udisk`. Community/extended
 ## Not implemented (by choice)
 
 Destructive/administrative commands — `reboot`, `setShutdown`, factory reset, network config — are intentionally **not** proxied for safety.
+
+## Not available in the HTTP API
+
+- **No favorite / like / thumbs-up command** for the *current* track. Confirmed against the official PDF, `python-linkplay`, and the community OpenAPI. The WiiM app's heart calls each streaming service's own cloud API, which a server can't reach — so this project implements "Love" via **Last.fm `track.love`** instead.
+- **Preset slots are read-only over HTTP** — you can list them (`getPresetInfo`) and **play** a slot (`MCUKeyShortClick:<n>`), but there is no command to set or reorder a preset from the API.

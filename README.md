@@ -35,6 +35,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 - [Configuration](#configuration)
 - [Public access / reverse proxy](#public-access--reverse-proxy)
 - [Cloudflare Turnstile](#cloudflare-turnstile)
+- [Last.fm scrobbling](#lastfm-scrobbling)
 - [Security model](#security-model)
 - [Development](#development)
 - [Project structure](#project-structure)
@@ -49,6 +50,9 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 | **Now playing** | Title / artist / album (hex-decoded), album art (proxied), live progress, seek, play/pause, prev/next, shuffle & repeat |
 | **Source-aware art** | Physical inputs (Optical, Line-in, …) show the source icon instead of stale cover art |
 | **Quality readout** | Bit rate · sample rate · bit depth, e.g. `1411 kbps · 44.1 kHz · 16-bit` |
+| **Stream info** | Detected streaming service + logo (Spotify / TIDAL / Qobuz Connect, AirPlay, DLNA, Bluetooth, in-app services) · inferred codec · graded tier — gold **Hi-Res Lossless**, silver **Lossless**, grey **Lossy** |
+| **Last.fm scrobbling** | Server-side background scrobbler that runs **even with the dashboard closed**; per-device toggle; scrobbles every source (incl. vinyl/optical/USB) |
+| **Last.fm Love** | ❤ button on the Now Playing card — loves/unloves the track on Last.fm (WiiM has no native favorite command) |
 | **Volume** | Slider **plus −/+ buttons** (touch-friendly on iPad) |
 | **Presets** | Square artwork tiles in a 2×6 grid (count auto-detected per model), tap to play; names + art from `getPresetInfo`; horizontal-scroll on phones |
 | **EQ** | Enable/disable + load named presets (`EQGetList` / `EQLoad`) |
@@ -154,7 +158,7 @@ All configuration is environment variables (see `.env.example`):
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | — | Optional; can also be set in **Settings** |
 | `WIIM_CLIENT_CERT_PATH` / `WIIM_CLIENT_KEY_PATH` | — | Optional mTLS override (a working LinkPlay cert is embedded) |
 
-The dashboard's polling interval, Turnstile keys and per-device source names are managed in the **Settings** and **Devices** pages and stored in SQLite.
+The dashboard's polling interval, Turnstile keys and per-device source names are managed in the **Settings** and **Devices** pages and stored in SQLite. **Last.fm scrobbling** is configured entirely in-app (Settings → Last.fm Scrobbling) — no new env var is needed.
 
 ## Public access / reverse proxy
 
@@ -173,6 +177,23 @@ The app serves plain HTTP on its port; **terminate TLS at a reverse proxy**. It 
 1. Cloudflare dashboard → **Turnstile** → create a widget for your domain.
 2. Paste the **Site key** + **Secret key** in **Settings → Cloudflare Turnstile** (or via env), toggle it on.
 3. The login form then requires a Turnstile challenge before credentials are checked.
+
+## Last.fm scrobbling
+
+The dashboard can scrobble your listening to [Last.fm](https://www.last.fm/) from a **server-side background scrobbler** — it polls each enabled device and submits plays even when no browser tab is open.
+
+1. Register an API account at **https://www.last.fm/api/account/create** to get an **API key** + **shared secret**.
+2. Paste both in **Settings → Last.fm Scrobbling**, then **Connect** — this opens a Last.fm authorize tab.
+3. Approve access, come back and click **Complete connection** (the session key never expires).
+4. Toggle scrobbling **per device**.
+
+The scrobbler sends `track.updateNowPlaying` on each track change and scrobbles once Last.fm's eligibility rule is met (track longer than 30s, played at least half its length or 4 minutes).
+
+> Because it reads the device directly, it scrobbles **all** sources — including vinyl/optical/USB/DLNA that streaming apps can't see. The flip side: if a streaming app (e.g. the Spotify or TIDAL app) already scrobbles the same playback, enable **only one** of them for that device to avoid duplicate scrobbles.
+
+**Love button** — the ❤ on the Now Playing card loves/unloves the current track on Last.fm. WiiM's HTTP API has no native favorite/like command, so Love is wired through Last.fm rather than the streaming service.
+
+Your API secret and session key are stored in the SQLite database server-side and are never sent to the browser.
 
 ## Security model
 
@@ -201,18 +222,21 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and step-by-step guides (
 src/
 ├── app/                      # Next.js App Router
 │   ├── (pages)               # /, /login, /setup, /settings, /devices
-│   └── api/                  # auth, settings, discover, devices/[id]/{control,eq,sub,output,source,preset,art,…}
+│   └── api/                  # auth, settings, discover, lastfm/{credentials,connect,session,disconnect,devices,love}, devices/[id]/{control,eq,sub,output,source,preset,art,snapshot,…}
 ├── components/
-│   ├── ui/                   # button, card, slider, stepper-slider, switch, input, icon…
+│   ├── ui/                   # button, card, slider, stepper-slider, switch, input, icon, service-logo…
 │   ├── auth/                 # login/setup forms, Turnstile widget
 │   ├── dashboard/            # now-playing, source, output, eq, sub, temp, preset cards…
 │   ├── devices/              # device manager (add / scan / rename / capabilities)
-│   └── settings/             # account, 2FA, Turnstile, polling
+│   └── settings/             # account, 2FA, Turnstile, polling, Last.fm
 ├── lib/
-│   ├── wiim/                 # device client (TLS/mTLS/SSRF), commands, parsing, capabilities, discovery
+│   ├── wiim/                 # device client (TLS/mTLS/SSRF), commands, parsing, capabilities, discovery, now-playing-info
+│   ├── lastfm/               # Audioscrobbler 2.0 client (auth, now-playing, scrobble, love)
+│   ├── scrobble/             # server-side background scrobbler (poller)
 │   ├── auth/                 # password, session, csrf, turnstile, totp, rate-limit
 │   ├── db/                   # better-sqlite3 store (users, sessions, devices, settings)
 │   └── client/               # browser fetch helpers + SWR hooks
+├── instrumentation.ts        # server-boot hook — starts the scrobbler (nodejs runtime)
 └── middleware.ts             # CSP nonce, security headers, page auth gate
 ```
 

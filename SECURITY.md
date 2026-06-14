@@ -50,5 +50,6 @@ Therefore the device must **never** be exposed to untrusted networks. Wiim Dashb
 
 ## Notes & limitations
 
+- **Last.fm credentials are server-only.** The API shared secret and the Last.fm session key are stored in the SQLite settings and **never sent to the client** — the settings API returns only the public API key plus booleans (`hasSecret`, `connected`). All Last.fm write actions (connect, disconnect, device toggles, track love/unlove) go through the same auth-guarded, CSRF-protected routes as the rest of the app.
 - The embedded **LinkPlay client certificate** in `src/lib/wiim/linkplay-cert.ts` is a publicly-shared cert used by multiple open-source projects — it is **not** a user secret.
 - This is a community project with no warranty (see LICENSE). Review the code before exposing it publicly.

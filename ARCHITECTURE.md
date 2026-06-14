@@ -37,11 +37,20 @@ better-sqlite3 (users, sessions, devices, settings)
 | `client.ts` | Low-level HTTPS transport: self-signed cert bypass + LinkPlay mTLS, **SSRF guard** (resolve → IP-check → pin), album/preset art fetch policy |
 | `constants.ts` | Command builders + numeric enums (sources, outputs, loop modes, sub ranges) mirrored from the official API / python-linkplay |
 | `commands.ts` | High-level typed functions: `fetchPlayerStatus`, `control`, `setEq`, `setSubwoofer`, `switchSource`, `setOutput`, `fetchPresets`, `playPreset`, … + the 30 s preset-list cache |
-| `parse.ts` | Tolerant JSON parse, hex decode, status/source/output mappings |
+| `parse.ts` | Tolerant JSON parse, hex decode, HTML-entity decode, status/source/output mappings + the official (asymmetric) read/write loop-mode tables |
+| `now-playing-info.ts` | Best-effort **service + audio-format detection** — the API has no vendor or codec field, so the service comes from the `getPlayerStatusEx` `mode` (Connect/cast codes) or the album-art host, and the codec/quality tier is inferred from bitrate, bit-depth and sample-rate |
 | `capabilities.ts` | Probes a device once and builds its `DeviceCapabilities` (temperature, sub-out, EQ, outputs, sources, preset count) |
 | `snapshot.ts` | One poll = a parallel `Promise.allSettled` of everything the dashboard needs for a device |
 | `discovery.ts` | SSDP multicast + direct IP-range scan |
 | `linkplay-cert.ts` | The shared public LinkPlay mTLS client cert/key |
+
+### `src/lib/lastfm/` — Last.fm client (server-only)
+
+`client.ts`: a minimal Audioscrobbler 2.0 client with correct `api_sig` MD5 signing. Covers the desktop auth flow (`getToken` → user authorizes → `getSession`; the session key never expires), `updateNowPlaying`, `scrobble`, `love`/`unlove`, and `getTrackLoved` (`track.getInfo`). The app's API key/secret + the session key live in the `lastfm` settings row and are **server-only** — only the public API key, plus `hasSecret`/`connected`/`username`/`scrobbleDevices`, are ever sent to the client.
+
+### `src/lib/scrobble/` — background scrobbler (server-only)
+
+`poller.ts`: the long-running scrobble loop. See [Background jobs](#background-jobs).
 
 ### `src/lib/auth/` — authentication & hardening (server-only)
 
@@ -64,6 +73,16 @@ better-sqlite3 (users, sessions, devices, settings)
 - The dashboard selects a device and calls `useSnapshot(deviceId, intervalMs)` (default 3 s).
 - `GET /api/devices/[id]/snapshot` runs `getDeviceSnapshot`, which fetches device info, player status, metadata, and — based on cached capabilities — sub-out, output, EQ and presets, all in parallel.
 - Cards render conditionally from the snapshot + capabilities. Mutations (play, volume, source, …) POST to the relevant route then call SWR `mutate()` to refresh.
+
+## Background jobs
+
+### Last.fm scrobbler
+
+`startScrobblePoller()` (`src/lib/scrobble/poller.ts`) runs **independently of any open browser tab**. It is started from `src/instrumentation.ts` `register()` on server boot (Node runtime only), with an idempotent fallback that the snapshot route also calls lazily — `globalThis` guards against double-starting.
+
+Every 15 s it polls each device whose `scrobbleDevices[id]` flag is set. On a track change it sends `track.updateNowPlaying`; it then sends `track.scrobble` once Last.fm's eligibility rule is met (track longer than 30 s **and** played for at least half its length or 4 minutes, whichever comes first). Per-track-instance dedup plus a backward-position check handle replays.
+
+> **Why scrobbling, not the WiiM heart?** The WiiM HTTP API has **no native favorite/like command** — the app's heart calls each streaming service's own cloud API, which the server can't reach. So "Love" on the Now Playing card is implemented via `track.love`/`track.unlove` instead.
 
 ## Capability detection
 
