@@ -82,13 +82,13 @@ export async function fetchMetaInfo(ip: string): Promise<MetaInfo> {
       Number.isFinite(br) && br > 0 ? (br >= 100000 ? Math.round(br / 1000) : Math.round(br)) : null;
 
     const parts: string[] = [];
-    // Bitrate first, then sample rate, then bit depth.
+    // Order: bitrate · bit-depth · sample-rate  (e.g. "967 kbps · 16-bit · 44.1 kHz").
     if (bitRate != null) parts.push(`${bitRate} kbps`); // kbps only — no Mbps conversion
+    if (bitDepth != null) parts.push(`${bitDepth}-bit`);
     if (sampleRate != null) {
       // kHz with up to 1 decimal, trimming a trailing ".0" (44.1, 48, 192).
       parts.push(`${(sampleRate / 1000).toFixed(1).replace(/\.0$/, "")} kHz`);
     }
-    if (bitDepth != null) parts.push(`${bitDepth}-bit`);
     return { albumArt: art, quality: parts.join(" · ") || null, sampleRate, bitDepth, bitRate };
   } catch {
     return EMPTY_META;

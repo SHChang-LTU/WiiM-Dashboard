@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Play,
@@ -14,7 +14,6 @@ import {
   Repeat1,
   Shuffle,
   Music4,
-  FileAudio,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
@@ -166,9 +165,6 @@ export function NowPlayingCard({
             )}
           </AnimatePresence>
           </div>
-          {showStreamInfo && player.service && (
-            <StreamInfo service={player.service} audio={player.audio} />
-          )}
         </div>
 
         {/* Meta + transport */}
@@ -309,6 +305,10 @@ export function NowPlayingCard({
               {player.muted ? "—" : vol}
             </span>
           </div>
+
+          {showStreamInfo && player.service && (
+            <StreamInfoLine service={player.service} audio={player.audio} />
+          )}
         </div>
       </div>
     </Card>
@@ -316,10 +316,11 @@ export function NowPlayingCard({
 }
 
 /**
- * Stream metadata shown beneath the cover for network / Bluetooth sources:
- * service (logo + name), inferred file format, and a quality-tier badge.
+ * Single-line stream metadata in the controls column for network / Bluetooth
+ * sources: "<logo> Service | FORMAT | TIER" (kept on one row — the stacked
+ * version was cramped on mobile).
  */
-function StreamInfo({ service, audio }: { service: StreamService; audio: AudioFormat | null }) {
+function StreamInfoLine({ service, audio }: { service: StreamService; audio: AudioFormat | null }) {
   const tierLabel =
     audio?.tier === "hires"
       ? "Hi-Res Lossless"
@@ -329,39 +330,38 @@ function StreamInfo({ service, audio }: { service: StreamService; audio: AudioFo
           ? "Lossy"
           : null;
 
+  const parts: ReactNode[] = [
+    <span key="svc" className="font-medium text-foreground/90">
+      {service.name}
+    </span>,
+  ];
+  if (audio?.codec) parts.push(<span key="codec">{audio.codec}</span>);
+  if (tierLabel)
+    parts.push(
+      <span key="tier" className="font-semibold uppercase tracking-wide text-primary">
+        {tierLabel}
+      </span>,
+    );
+
+  const nodes: ReactNode[] = [];
+  parts.forEach((p, i) => {
+    if (i > 0)
+      nodes.push(
+        <span key={`sep-${i}`} className="text-muted-foreground/40">
+          |
+        </span>,
+      );
+    nodes.push(p);
+  });
+
   return (
-    <div className="w-44 space-y-2 text-left sm:w-52">
-      {/* Streaming service */}
-      <div className="flex items-center gap-2 text-sm font-medium text-foreground/90">
-        <ServiceLogo logo={service.logo} serviceKey={service.key} className="size-4 shrink-0" />
-        <span className="truncate">{service.name}</span>
-      </div>
-
-      {/* File format (inferred — WiiM's API doesn't expose the codec) */}
-      {audio?.codec && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <FileAudio className="size-3.5 shrink-0" />
-          <span>{audio.codec}</span>
-        </div>
-      )}
-
-      {/* Quality tier */}
-      {tierLabel && (
-        <div>
-          <span
-            className={cn(
-              "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-              audio?.tier === "hires"
-                ? "bg-amber-400/15 text-amber-300"
-                : audio?.tier === "lossless"
-                  ? "bg-primary/15 text-primary"
-                  : "bg-white/8 text-muted-foreground",
-            )}
-          >
-            {tierLabel}
-          </span>
-        </div>
-      )}
+    <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+      <ServiceLogo
+        logo={service.logo}
+        serviceKey={service.key}
+        className="size-4 shrink-0 text-foreground/80"
+      />
+      {nodes}
     </div>
   );
 }
