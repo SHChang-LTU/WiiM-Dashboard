@@ -66,31 +66,57 @@ function nonZero(v: unknown): boolean {
   return !!s && s !== "0.0.0.0";
 }
 
-/** Map the read-side `loop` field to {repeat, shuffle}. */
+/**
+ * Map the read-side `loop` field (getPlayerStatusEx) to {repeat, shuffle}.
+ *
+ * Values follow the official "HTTP API for WiiM Products" status table — which
+ * differs from the python-linkplay / Home-Assistant enum (those were written
+ * against older LinkPlay firmware and mis-map 0/1/3 on current WiiM units):
+ *   0 = loop all            -> repeat all
+ *   1 = single loop         -> repeat one
+ *   2 = shuffle loop        -> shuffle + repeat all
+ *   3 = shuffle, no loop    -> shuffle, no repeat
+ *   4 = no shuffle, no loop -> off  (the device's default; sample shows loop:4)
+ * -1 (write-only "sequence loop") and 5 (firmware-specific shuffle+repeat) are
+ * mapped defensively in case they ever surface on the read side.
+ */
 function parseLoop(loop: number): { repeat: "off" | "one" | "all"; shuffle: boolean } {
   switch (loop) {
-    case -1:
-      return { repeat: "one", shuffle: false };
-    case 1:
-      return { repeat: "all", shuffle: false };
-    case 2:
-      return { repeat: "off", shuffle: true };
-    case 3:
-      return { repeat: "all", shuffle: true };
-    case 5:
-      return { repeat: "one", shuffle: true };
     case 0:
+      return { repeat: "all", shuffle: false };
+    case 1:
+      return { repeat: "one", shuffle: false };
+    case 2:
+      return { repeat: "all", shuffle: true };
+    case 3:
+      return { repeat: "off", shuffle: true };
+    case 5:
+      return { repeat: "all", shuffle: true };
+    case -1:
+      return { repeat: "all", shuffle: false };
     case 4:
     default:
       return { repeat: "off", shuffle: false };
   }
 }
 
-/** Inverse: compute the loopmode value to write for a desired repeat/shuffle. */
+/**
+ * Inverse: the loopmode value to WRITE for a desired repeat/shuffle.
+ *
+ * The WiiM write command (setPlayerCmd:loopmode) only accepts the documented
+ * set {-1, 0, 1, 2} and is asymmetric with the read table:
+ *   off, no shuffle -> 0   ("sequence, no loop"; device reports back 4)
+ *   one, no shuffle -> 1   ("single loop";       reports back 1)
+ *   all, no shuffle -> -1  ("sequence loop";     reports back 0 = loop all)
+ *   any, shuffle    -> 2   ("shuffle loop" = shuffle + repeat all — the only
+ *                           shuffle mode settable over HTTP; reports back 2)
+ * Each write round-trips to the matching parseLoop() state above.
+ */
 export function computeLoopMode(repeat: "off" | "one" | "all", shuffle: boolean): number {
-  if (repeat === "one") return shuffle ? 5 : -1;
-  if (repeat === "all") return shuffle ? 3 : 1;
-  return shuffle ? 2 : 0;
+  if (shuffle) return 2;
+  if (repeat === "one") return 1;
+  if (repeat === "all") return -1;
+  return 0;
 }
 
 export function parsePlayerStatus(raw: Record<string, unknown>): PlayerStatus {

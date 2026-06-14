@@ -58,14 +58,27 @@ export const PLAYING_STATUS = {
   pause: "paused",
 } as const;
 
-/** Loop/shuffle enum written via setPlayerCmd:loopmode:<n>. */
+/**
+ * Loop/shuffle enum for WiiM. NOTE: the WRITE command
+ * (setPlayerCmd:loopmode:<n>) and the READ field (getPlayerStatusEx `loop`)
+ * use *different*, asymmetric tables on WiiM firmware. See parse.ts
+ * (parseLoop / computeLoopMode) for the authoritative mapping.
+ *
+ * Write values (documented): -1 sequence loop (= repeat all), 0 sequence/no
+ * loop (= off), 1 single loop (= repeat one), 2 shuffle loop (= shuffle+all).
+ * Read values: 0 loop all, 1 single loop, 2 shuffle loop, 3 shuffle no loop,
+ * 4 no shuffle no loop (off / default).
+ */
 export const LoopMode = {
-  REPEAT_ONE: -1,
-  ORDER: 0, // play in order, no repeat
-  REPEAT_ALL: 1,
-  SHUFFLE: 2, // random
-  SHUFFLE_REPEAT_ALL: 3, // list cycle (shuffle + repeat)
-  OFF: 4, // shuffle off, repeat off
+  WRITE_SEQUENCE_LOOP: -1, // repeat all (reads back as 0)
+  WRITE_OFF: 0, // sequence, no loop (reads back as 4)
+  WRITE_REPEAT_ONE: 1, // single loop
+  WRITE_SHUFFLE: 2, // shuffle loop (shuffle + repeat all)
+  READ_LOOP_ALL: 0,
+  READ_SINGLE_LOOP: 1,
+  READ_SHUFFLE_LOOP: 2,
+  READ_SHUFFLE_NO_LOOP: 3,
+  READ_OFF: 4,
 } as const;
 
 /**

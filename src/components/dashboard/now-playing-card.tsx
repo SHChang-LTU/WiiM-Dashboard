@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Play,
@@ -42,6 +42,11 @@ export function NowPlayingCard({
   const [vol, setVol] = useState(player.volume);
   const [draggingVol, setDraggingVol] = useState(false);
   const [draggingSeek, setDraggingSeek] = useState(false);
+  // Local repeat/shuffle so the buttons update instantly (optimistic); the
+  // device reading is asymmetric and lags the poll otherwise.
+  const [repeat, setRepeat] = useState(player.repeat);
+  const [shuffle, setShuffle] = useState(player.shuffle);
+  const loopFreezeUntil = useRef(0);
 
   const isPlaying = player.state === "playing";
   const srcDef = player.sourceKey ? SOURCES.find((s) => s.key === player.sourceKey) : undefined;
@@ -63,6 +68,16 @@ export function NowPlayingCard({
   useEffect(() => {
     if (!draggingVol) setVol(player.volume);
   }, [player.volume, draggingVol]);
+
+  // Sync repeat/shuffle from device, but briefly freeze right after a tap so the
+  // optimistic value isn't overwritten by a poll that fires before the device
+  // reflects the change.
+  useEffect(() => {
+    if (Date.now() >= loopFreezeUntil.current) {
+      setRepeat(player.repeat);
+      setShuffle(player.shuffle);
+    }
+  }, [player.repeat, player.shuffle]);
 
   // Tick position forward while playing.
   useEffect(() => {
@@ -91,7 +106,19 @@ export function NowPlayingCard({
   const hasDuration = player.duration > 0;
   const VolIcon = player.muted || vol === 0 ? VolumeX : vol < 50 ? Volume1 : Volume2;
 
-  const nextRepeat = player.repeat === "off" ? "all" : player.repeat === "all" ? "one" : "off";
+  function cycleRepeat() {
+    const next = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
+    setRepeat(next);
+    loopFreezeUntil.current = Date.now() + 2500;
+    void send({ action: "repeat", repeat: next, shuffle });
+  }
+
+  function toggleShuffle() {
+    const next = !shuffle;
+    setShuffle(next);
+    loopFreezeUntil.current = Date.now() + 2500;
+    void send({ action: "shuffle", repeat, shuffle: next });
+  }
 
   return (
     <Card className="overflow-hidden p-5 sm:p-6">
@@ -136,7 +163,12 @@ export function NowPlayingCard({
         {/* Meta + transport */}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="mb-1 flex items-center gap-2">
-            <span className="rounded-full bg-white/8 px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+              {srcDef ? (
+                <DynIcon name={srcDef.icon} className="size-3.5" />
+              ) : (
+                <Music4 className="size-3.5" />
+              )}
               {sourceDisplay}
             </span>
             {player.quality && (
@@ -182,12 +214,10 @@ export function NowPlayingCard({
           {/* Transport buttons */}
           <div className="mt-3 flex items-center justify-between">
             <button
-              onClick={() =>
-                void send({ action: "shuffle", repeat: player.repeat, shuffle: !player.shuffle })
-              }
+              onClick={toggleShuffle}
               className={cn(
                 "focus-ring grid size-10 place-items-center rounded-full transition",
-                player.shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                shuffle ? "text-primary" : "text-muted-foreground hover:text-foreground",
               )}
               aria-label="Shuffle"
             >
@@ -228,14 +258,14 @@ export function NowPlayingCard({
             </div>
 
             <button
-              onClick={() => void send({ action: "repeat", repeat: nextRepeat, shuffle: player.shuffle })}
+              onClick={cycleRepeat}
               className={cn(
                 "focus-ring grid size-10 place-items-center rounded-full transition",
-                player.repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                repeat !== "off" ? "text-primary" : "text-muted-foreground hover:text-foreground",
               )}
-              aria-label="Repeat"
+              aria-label={repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat off"}
             >
-              {player.repeat === "one" ? <Repeat1 className="size-5" /> : <Repeat className="size-5" />}
+              {repeat === "one" ? <Repeat1 className="size-5" /> : <Repeat className="size-5" />}
             </button>
           </div>
 

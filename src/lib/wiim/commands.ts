@@ -64,8 +64,9 @@ export async function fetchMetaInfo(
     // Bitrate first, then sample rate, then bit depth.
     if (Number.isFinite(br) && br > 0) {
       // bitRate may be reported in bps or kbps depending on firmware.
+      // Always show kbps (no Mbps conversion) — e.g. "2900 kbps".
       const kbps = br >= 100000 ? Math.round(br / 1000) : Math.round(br);
-      parts.push(kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${kbps} kbps`);
+      parts.push(`${kbps} kbps`);
     }
     if (Number.isFinite(sr) && sr > 0) {
       // Show kHz with up to 1 decimal, trimming a trailing ".0" (44.1, 48, 192).
