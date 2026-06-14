@@ -115,6 +115,21 @@ export async function fetchMetaInfo(ip: string): Promise<MetaInfo> {
   }
 }
 
+/** Connected Bluetooth *source* device name (the phone/tablet casting to us). */
+export async function fetchBtSourceName(ip: string): Promise<string | null> {
+  try {
+    const text = await send(ip, "getbtstatus", 4000);
+    const raw = safeJson<{ a2dp_sink?: { link_state?: string; name?: unknown } }>(text);
+    const sink = raw?.a2dp_sink;
+    if (sink?.link_state === "connected" && typeof sink.name === "string" && sink.name.trim()) {
+      return sink.name.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export type ControlAction =
   | "play"
   | "pause"

@@ -7,6 +7,7 @@ import {
   fetchSubwoofer,
   fetchOutput,
   fetchPresets,
+  fetchBtSourceName,
 } from "./commands";
 import { detectService, inferAudioFormat } from "./now-playing-info";
 import type { DeviceSnapshot, DeviceCapabilities } from "./types";
@@ -77,6 +78,11 @@ export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceS
       meta.bitDepth,
       meta.bitRate,
     );
+    // For Bluetooth, also show which device is casting (getbtstatus a2dp_sink).
+    if (player.service?.key === "bluetooth") {
+      const dev = await fetchBtSourceName(device.ip).catch(() => null);
+      if (dev) player.service = { ...player.service, detail: dev };
+    }
     if (meta.albumArt) {
       const sig = createHash("sha1")
         .update(`${player.title ?? ""}|${player.artist ?? ""}|${meta.albumArt}`)

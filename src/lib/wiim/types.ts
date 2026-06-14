@@ -7,6 +7,7 @@ export interface StreamService {
   key: string; // "tidal" | "spotify" | "qobuz" | "airplay" | "bluetooth" | ...
   name: string; // display label, e.g. "TIDAL Connect"
   logo: string | null; // brand-logo key for <ServiceLogo>; null → lucide fallback
+  detail?: string | null; // e.g. the connected Bluetooth source device name
 }
 
 /**
