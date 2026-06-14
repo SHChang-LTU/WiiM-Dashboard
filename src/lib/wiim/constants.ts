@@ -194,7 +194,7 @@ export const SUB_RANGES = {
 } as const;
 
 /** Amp model families that expose temperature_cpu / temperature_tmp102. */
-export const AMP_PROJECT_HINTS = ["amp", "vibelink"];
+export const AMP_PROJECT_HINTS = ["amp"];
 
 function clampInt(n: number, min: number, max: number): number {
   const v = Math.round(Number(n));

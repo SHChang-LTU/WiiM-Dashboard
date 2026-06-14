@@ -197,7 +197,6 @@ const MODEL_NAMES: Record<string, string> = {
   WiiM_Amp_Pro: "WiiM Amp Pro",
   WiiM_Amp_Ultra: "WiiM Amp Ultra",
   WiiM_Ultra: "WiiM Ultra",
-  Vibelink_Amp: "Vibelink Amp",
 };
 
 function friendlyModel(project: string, priv: string): string {

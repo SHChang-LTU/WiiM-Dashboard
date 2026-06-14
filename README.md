@@ -72,8 +72,10 @@ Any WiiM / LinkPlay device that exposes the `httpapi.asp` HTTP API, including:
 
 - **WiiM Mini, Pro, Pro Plus** — playback, EQ, source/output
 - **WiiM Ultra** — + sub-out, output routing, presets, headphones out
-- **WiiM Amp / Amp Pro / Amp Ultra, Vibelink Amp** — + device temperature
+- **WiiM Amp / Amp Pro / Amp Ultra** — + device temperature
 - Other LinkPlay OEM streamers may work to varying degrees
+
+> The dashboard controls devices over their network HTTP API, so non-networked WiiM accessories — e.g. the **Vibelink Amp** (a passive power amplifier) — can't be controlled here. Pair them with a WiiM streamer and control that.
 
 Feature availability is detected per device at add time (and refreshable), so unsupported cards are simply hidden.
 
