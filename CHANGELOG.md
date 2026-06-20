@@ -3,15 +3,20 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.1] — 2026-06-20
+
+Now-playing polish (album-art theming, Bluetooth), plus fixes for cloud-hosted
+artwork and iPad rendering.
 
 ### Added
-- **Now Playing colour theming** — the card subtly tints to the current album art's dominant colour (with a matching glow around the cover), crossfading on track change. Dark/washed covers are normalised so they still read; monochrome covers tint nothing. Colour is extracted client-side from the displayed cover.
-- **Bluetooth now-playing** — track title/artist/album (via `getMetaInfo` / AVRCP, since `getPlayerStatusEx` leaves them empty for BT) plus the connected source device, e.g. "Bluetooth · @illiano-iPadPro" (from `getbtstatus`). Bluetooth scrobbling works too, using a wall-clock eligibility rule (BT reports no position/length).
+- **Album-art colour theming** — the Now Playing card tints to the current cover's dominant colour, with a matching glow around the artwork, crossfading smoothly on every track change. The colour is extracted client-side from the displayed cover (canvas) and normalised so dark or washed-out covers still read clearly; black-and-white covers tint nothing.
+- **Bluetooth now-playing** — playing over Bluetooth leaves `getPlayerStatusEx` empty, so the dashboard now reads the track title / artist / album from `getMetaInfo` (AVRCP) and shows the **connected source device** alongside the source, e.g. "Bluetooth · @your-iPad" (via `getbtstatus`).
+- **Bluetooth scrobbling** — the Last.fm scrobbler now covers Bluetooth too; since BT reports no track position/length, it uses a wall-clock eligibility rule instead of the position-based one.
 
 ### Fixed
-- **Cloud-CDN artwork** — album art and preset tiles served by WiiM's cloud CDN (`*.wiimhome.com`) were dropped because the CDN mislabels them as `application/octet-stream`. The art proxy now sniffs the image magic bytes and corrects the type, keeping the SSRF guard / TLS verification / IP-pinning intact. Thanks to @gthibo for the report and original fix (#1, #2).
-- The **WiiM Vibelink Amp** is no longer listed as a supported device — it's a passive power amplifier with no network / HTTP API, so it can't be controlled.
+- **Cloud-CDN artwork** — album art and preset tiles served by WiiM's cloud CDN (`*.wiimhome.com`) showed blank because the CDN mislabels them as `application/octet-stream`, so the `image/*` check dropped them. The art proxy now sniffs the image's magic bytes and serves the correct type, fixing **both** the album-art and preset-art proxies while keeping the SSRF guard, TLS verification and IP-pinning intact. Thanks to **@gthibo** for the report and original fix (#1, #2).
+- **Slider fills on iOS / iPad** — the volume, seek, EQ and sub-out slider fills rendered as a dark track in Safari/WebKit, because Tailwind's `bg-gradient-*` helper relies on custom properties iOS doesn't parse here. Switched to an explicit CSS gradient so the purple→cyan fill shows on every browser.
+- **WiiM Vibelink Amp** is no longer listed as a supported device — it's a passive power amplifier with no network / HTTP API, so the dashboard can't control it.
 
 ## [0.2.0] — 2026-06-14
 
