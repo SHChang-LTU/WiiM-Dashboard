@@ -49,10 +49,11 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 
 | Area | What you get |
 |---|---|
-| **Now playing** | Title / artist / album (hex-decoded), album art (proxied), live progress, seek, play/pause, prev/next, shuffle & repeat |
+| **Now playing** | Title / artist / album (hex-decoded), album art (proxied), live progress, seek, play/pause, prev/next, shuffle & repeat; current track shown in the browser tab title |
 | **Album-art theming** | The card tints to the cover's dominant colour with a matching glow, crossfading per track (monochrome covers stay neutral) |
+| **Vinyl view** | Toggle the cover for a spinning vinyl record — the cover becomes the centre label, the platter eases up to speed and slows to a stop like a real turntable, and Phono inputs default to it |
 | **Source-aware art** | Physical inputs (Optical, Line-in, …) show the source icon instead of stale cover art |
-| **Quality readout** | Bit rate · sample rate · bit depth, e.g. `1411 kbps · 44.1 kHz · 16-bit` |
+| **Quality readout** | Bit rate · bit depth · sample rate, e.g. `1411 kbps · 16-bit · 44.1 kHz`, shown as a clean segmented chip |
 | **Stream info** | Detected streaming service + logo (Spotify / TIDAL / Qobuz Connect, AirPlay, DLNA, Bluetooth, in-app services) · inferred codec · graded tier — gold **Hi-Res Lossless**, silver **Lossless**, grey **Lossy** |
 | **Last.fm scrobbling** | Server-side background scrobbler that runs **even with the dashboard closed**; per-device toggle; scrobbles every source (incl. vinyl/optical/USB) |
 | **Last.fm Love** | ❤ button on the Now Playing card — loves/unloves the track on Last.fm (WiiM has no native favorite command) |

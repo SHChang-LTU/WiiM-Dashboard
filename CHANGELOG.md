@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2] — 2026-06-21
+
+Now-playing visual polish — a spinning vinyl view, a clearer bit-rate readout, and the current track in the browser tab.
+
+### Added
+- **Vinyl-record now-playing view** — a toggle on the Now Playing card swaps the album cover for a spinning vinyl record, with the cover as the centre label. Physical turntables (**Phono**) default to it. The platter eases up to speed and gradually slows to a stop (rAF-driven, like a real turntable, not an abrupt CSS cut), a tonearm rests its stylus on the outer grooves, and the disc still drives the album-art colour theming. Honours `prefers-reduced-motion`, and the cover ⇄ vinyl choice is remembered across sessions.
+- **Now playing in the browser tab** — the document title now shows `<Track> - <Artist> | Wiim Dashboard` for the selected device, updating live on every track change and falling back to the app name when nothing is playing.
+
+### Changed
+- **Clearer bit-rate readout** — the quality chip (kbps · bit-depth · kHz) was purple-on-tint and hard to read over the album-art colour wash. It's now a segmented chip: each value sits in its own cell divided by thin rules, the number emphasised and the unit muted, on a neutral frosted background — legible on any cover colour.
+
 ## [0.2.1] — 2026-06-20
 
 Now-playing polish (album-art theming, Bluetooth), plus fixes for cloud-hosted

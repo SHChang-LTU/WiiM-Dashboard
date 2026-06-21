@@ -30,5 +30,8 @@ npm-debug.log*
 .vscode/
 .idea/
 
+# local AI/editor tooling (may hold local identity / secrets — never publish)
+.claude/
+
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
