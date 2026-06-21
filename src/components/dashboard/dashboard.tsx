@@ -59,6 +59,21 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
   const { snapshot, mutate, isLoading } = useSnapshot(selectedId, interval);
   const refresh = () => void mutate();
 
+  // Reflect the selected device's current track in the browser tab title:
+  // "<Track> - <Artist> | Wiim Dashboard", falling back to the app name.
+  const titlePlayer = snapshot?.id === selectedId ? snapshot?.player : null;
+  useEffect(() => {
+    const base = "Wiim Dashboard";
+    const t = titlePlayer?.title?.trim();
+    const a = titlePlayer?.artist?.trim();
+    document.title =
+      t && titlePlayer?.state !== "stopped"
+        ? a
+          ? `${t} - ${a} | ${base}`
+          : `${t} | ${base}`
+        : base;
+  }, [titlePlayer?.title, titlePlayer?.artist, titlePlayer?.state]);
+
   if (devices.length === 0) {
     return (
       <>
