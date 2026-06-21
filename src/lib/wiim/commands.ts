@@ -87,7 +87,12 @@ export async function fetchMetaInfo(ip: string): Promise<MetaInfo> {
     const bd = Number(m.bitDepth);
     const br = Number(m.bitRate);
     const sampleRate = Number.isFinite(sr) && sr > 0 ? sr : null;
-    const bitDepth = Number.isFinite(bd) && bd > 0 ? bd : null;
+    const bitDepthRaw = Number.isFinite(bd) && bd > 0 ? bd : null;
+    // WiiM reports 24-bit hi-res FLAC as "32": the 24 significant bits are
+    // packed in 32-bit words and the decoder reports the word size, not the
+    // source depth. No consumer streaming source is true 32-bit, so normalise
+    // 32 → 24. (16-bit sources are reported correctly and left untouched.)
+    const bitDepth = bitDepthRaw === 32 ? 24 : bitDepthRaw;
     // bitRate may be reported in bps or kbps depending on firmware.
     const bitRate =
       Number.isFinite(br) && br > 0 ? (br >= 100000 ? Math.round(br / 1000) : Math.round(br)) : null;
