@@ -35,6 +35,7 @@ import { VinylDisc } from "./vinyl-disc";
 import { QualityPill } from "./quality-pill";
 import { KioskView } from "./kiosk-view";
 import { LyricsView } from "./lyrics-view";
+import { SleepButton } from "./sleep-button";
 import { extractColor, type RGB } from "@/lib/client/use-album-color";
 import type { PlayerStatus, StreamService, AudioFormat, LyricLine } from "@/lib/wiim/types";
 
@@ -44,6 +45,7 @@ export function NowPlayingCard({
   sourceLabels,
   autoSourceLabels,
   canLove,
+  sleepExpiresAt,
   onChanged,
 }: {
   deviceId: string;
@@ -51,6 +53,7 @@ export function NowPlayingCard({
   sourceLabels?: Record<string, string>;
   autoSourceLabels?: Record<string, string>;
   canLove?: boolean;
+  sleepExpiresAt?: number | null;
   onChanged: () => void;
 }) {
   const toast = useToast();
@@ -423,6 +426,13 @@ export function NowPlayingCard({
               {sourceDisplay}
             </span>
             <QualityPill quality={player.quality} audio={player.audio} />
+            <div className="ml-auto">
+              <SleepButton
+                deviceId={deviceId}
+                expiresAt={sleepExpiresAt ?? null}
+                onChanged={onChanged}
+              />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <h2 className="truncate text-xl font-semibold text-foreground">

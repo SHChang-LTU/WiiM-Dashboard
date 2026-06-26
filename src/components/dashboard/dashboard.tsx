@@ -131,6 +131,7 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
                 sourceLabels={selectedDevice?.sourceLabels}
                 autoSourceLabels={snap.sourceNames}
                 canLove={!!settings?.lastfm?.connected}
+                sleepExpiresAt={snap.sleepExpiresAt}
                 onChanged={refresh}
               />
             )}

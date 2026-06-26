@@ -13,6 +13,7 @@ import {
   fetchUsbDac,
 } from "./commands";
 import { detectService, inferAudioFormat } from "./now-playing-info";
+import { getSleep } from "@/lib/sleep/timer";
 import type { DeviceSnapshot, DeviceCapabilities } from "./types";
 
 export interface PollableDevice {
@@ -123,6 +124,7 @@ export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceS
             .map(([k]) => k)
         : undefined,
     usbDac: usbDacR.status === "fulfilled" ? usbDacR.value : null,
+    sleepExpiresAt: getSleep(device.id),
   };
 }
 

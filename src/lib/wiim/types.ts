@@ -171,4 +171,6 @@ export interface DeviceSnapshot {
   disabledSources?: string[];
   /** connected USB DAC name (getSoundCardModeSupportList); null if none. */
   usbDac?: string | null;
+  /** sleep-timer expiry (epoch ms) for this device; null if none. */
+  sleepExpiresAt?: number | null;
 }
