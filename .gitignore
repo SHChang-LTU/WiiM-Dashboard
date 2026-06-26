@@ -35,3 +35,8 @@ npm-debug.log*
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
+
+# wiim-sniff.py capture output (contains device IPs / account-linked URLs)
+scripts/wiim-capture.jsonl
+scripts/wiim-commands-summary.json
+__pycache__/
