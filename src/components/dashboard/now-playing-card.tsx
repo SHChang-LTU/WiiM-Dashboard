@@ -40,12 +40,14 @@ export function NowPlayingCard({
   deviceId,
   player,
   sourceLabels,
+  autoSourceLabels,
   canLove,
   onChanged,
 }: {
   deviceId: string;
   player: PlayerStatus;
   sourceLabels?: Record<string, string>;
+  autoSourceLabels?: Record<string, string>;
   canLove?: boolean;
   onChanged: () => void;
 }) {
@@ -67,7 +69,10 @@ export function NowPlayingCard({
   const isPlaying = player.state === "playing";
   const srcDef = player.sourceKey ? SOURCES.find((s) => s.key === player.sourceKey) : undefined;
   const sourceDisplay =
-    (player.sourceKey && sourceLabels?.[player.sourceKey]?.trim()) || player.sourceLabel;
+    (player.sourceKey &&
+      (sourceLabels?.[player.sourceKey]?.trim() ||
+        autoSourceLabels?.[player.sourceKey]?.trim())) ||
+    player.sourceLabel;
   // Physical inputs (Optical, Line-in, Coax, HDMI, Phono…) don't carry cover
   // art — show the source icon instead of a stale/blank image. Only
   // network/streaming sources display album art.

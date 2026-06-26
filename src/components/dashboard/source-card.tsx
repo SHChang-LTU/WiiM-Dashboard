@@ -13,12 +13,14 @@ export function SourceCard({
   sourceKeys,
   currentKey,
   sourceLabels,
+  autoSourceLabels,
   onChanged,
 }: {
   deviceId: string;
   sourceKeys: string[];
   currentKey: string | null;
   sourceLabels?: Record<string, string>;
+  autoSourceLabels?: Record<string, string>;
   onChanged: () => void;
 }) {
   const toast = useToast();
@@ -26,7 +28,7 @@ export function SourceCard({
 
   const options = SOURCES.filter((s) => sourceKeys.includes(s.key)).map((s) => ({
     id: s.value,
-    label: sourceLabels?.[s.key]?.trim() || s.label,
+    label: sourceLabels?.[s.key]?.trim() || autoSourceLabels?.[s.key]?.trim() || s.label,
     icon: s.icon,
   }));
 

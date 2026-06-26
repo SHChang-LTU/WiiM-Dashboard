@@ -32,6 +32,8 @@ export const Cmd = {
   switchMode: (mode: string) => `setPlayerCmd:switchmode:${mode}`,
   getOutput: "getNewAudioOutputHardwareMode",
   setOutput: (n: number) => `setAudioOutputHardwareMode:${Math.trunc(n)}`,
+  // User-assigned input names from the WiiM app ({mode: name}; "Failed" if none).
+  getModeRename: "getModeRename",
 
   // EQ (WiiM named-preset API)
   eqStat: "EQGetStat",

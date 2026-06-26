@@ -129,6 +129,7 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
                 deviceId={did}
                 player={player}
                 sourceLabels={selectedDevice?.sourceLabels}
+                autoSourceLabels={snap.sourceNames}
                 canLove={!!settings?.lastfm?.connected}
                 onChanged={refresh}
               />
@@ -148,6 +149,7 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
                   sourceKeys={caps.sources}
                   currentKey={player.sourceKey}
                   sourceLabels={selectedDevice?.sourceLabels}
+                  autoSourceLabels={snap.sourceNames}
                   onChanged={refresh}
                 />
               )}

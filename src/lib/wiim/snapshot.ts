@@ -8,6 +8,7 @@ import {
   fetchOutput,
   fetchPresets,
   fetchBtSourceName,
+  fetchModeRename,
 } from "./commands";
 import { detectService, inferAudioFormat } from "./now-playing-info";
 import type { DeviceSnapshot, DeviceCapabilities } from "./types";
@@ -22,13 +23,14 @@ export interface PollableDevice {
 export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceSnapshot> {
   const caps = device.capabilities;
 
-  const [infoR, playerR, metaR, subR, outR, presetsR] = await Promise.allSettled([
+  const [infoR, playerR, metaR, subR, outR, presetsR, renameR] = await Promise.allSettled([
     fetchDeviceInfo(device.ip),
     fetchPlayerStatus(device.ip),
     fetchMetaInfo(device.ip),
     caps?.subwoofer ? fetchSubwoofer(device.ip) : Promise.resolve(null),
     caps?.outputSwitch ? fetchOutput(device.ip) : Promise.resolve(null),
     caps?.presetCount ? fetchPresets(device.ip, caps.presetCount) : Promise.resolve(null),
+    fetchModeRename(device.ip),
   ]);
 
   // If both core reads failed, the device is offline/unreachable.
@@ -108,6 +110,7 @@ export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceS
     output: outR.status === "fulfilled" ? outR.value : null,
     presets,
     capabilities: caps,
+    sourceNames: renameR.status === "fulfilled" ? renameR.value : undefined,
   };
 }
 

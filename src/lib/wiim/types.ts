@@ -159,4 +159,6 @@ export interface DeviceSnapshot {
   output: OutputStatus | null;
   presets: PresetItem[] | null;
   capabilities: DeviceCapabilities | null;
+  /** custom input names from the WiiM app (getModeRename), keyed by SOURCES.key. */
+  sourceNames?: Record<string, string>;
 }

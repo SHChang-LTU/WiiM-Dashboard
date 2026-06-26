@@ -1,6 +1,6 @@
 import "server-only";
 import { wiimRequest, WiimError } from "./client";
-import { Cmd, SUB_RANGES } from "./constants";
+import { Cmd, SOURCES, SUB_RANGES } from "./constants";
 import {
   safeJson,
   parsePlayerStatus,
@@ -132,6 +132,40 @@ export async function fetchBtSourceName(ip: string): Promise<string | null> {
     return null;
   } catch {
     return null;
+  }
+}
+
+/** Map a getModeRename key (a switchmode-style mode string) to a SOURCES.key. */
+const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+const RENAME_KEY_TO_SOURCE: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const s of SOURCES) m[normKey(s.value)] = s.key;
+  m["usbdac"] = "PCUSB"; // getModeRename sometimes keys the USB-DAC input this way
+  return m;
+})();
+
+/**
+ * User-assigned input names set in the WiiM app, keyed by SOURCES.key. The
+ * dashboard shows these as the default source labels so they don't have to be
+ * re-typed. Returns {} when nothing is renamed (device replies "Failed") or the
+ * command is unsupported. Unmapped or blank entries are dropped.
+ */
+export async function fetchModeRename(ip: string): Promise<Record<string, string>> {
+  try {
+    const text = await send(ip, Cmd.getModeRename, 4000);
+    if (text.trim().toLowerCase().startsWith("failed")) return {};
+    const raw = safeJson<Record<string, unknown>>(text);
+    if (!raw || typeof raw !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [rawKey, rawVal] of Object.entries(raw)) {
+      const key = RENAME_KEY_TO_SOURCE[normKey(rawKey)];
+      if (!key) continue;
+      const name = cleanMetaText(rawVal);
+      if (name) out[key] = name;
+    }
+    return out;
+  } catch {
+    return {};
   }
 }
 
