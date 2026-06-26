@@ -153,6 +153,53 @@ export interface WiimResponse {
   text: string;
 }
 
+/**
+ * Per-device request gate. The embedded LinkPlay box drops or garbles requests
+ * when hit with too many at once — one snapshot poll fans out ~9 reads in
+ * parallel — so we cap concurrent in-flight httpapi calls PER DEVICE. Tune with
+ * WIIM_DEVICE_CONCURRENCY (default 4; set 1–2 for older / flaky devices).
+ */
+const MAX_DEVICE_CONCURRENCY = Math.max(1, Number(process.env.WIIM_DEVICE_CONCURRENCY) || 4);
+
+class DeviceGate {
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  acquire(): Promise<() => void> {
+    return new Promise<() => void>((grant) => {
+      let released = false;
+      const release = () => {
+        if (released) return; // idempotent — safe to call once per acquire
+        released = true;
+        this.active--;
+        this.pump();
+      };
+      this.waiters.push(() => grant(release));
+      this.pump();
+    });
+  }
+
+  // Grant slots to queued waiters while under the cap. active is incremented
+  // synchronously before each grant, so the cap can never be exceeded.
+  private pump(): void {
+    while (this.active < MAX_DEVICE_CONCURRENCY && this.waiters.length > 0) {
+      this.active++;
+      this.waiters.shift()!();
+    }
+  }
+}
+
+const deviceGates = new Map<string, DeviceGate>();
+function deviceGate(host: string): DeviceGate {
+  const key = host.trim().toLowerCase();
+  let gate = deviceGates.get(key);
+  if (!gate) {
+    gate = new DeviceGate();
+    deviceGates.set(key, gate);
+  }
+  return gate;
+}
+
 /** Send one httpapi.asp command. Host is resolved, IP-checked (must be LAN), and pinned. */
 export async function wiimRequest(
   host: string,
@@ -167,7 +214,10 @@ export async function wiimRequest(
   const port = opts.port ?? 443;
   const path = `${HTTPAPI_PATH}?command=${encodeCommand(command)}`;
 
-  return new Promise<WiimResponse>((resolve, reject) => {
+  // Hold a per-device slot for the lifetime of this request (released on
+  // success, error, OR timeout via .finally below).
+  const release = await deviceGate(host).acquire();
+  const p = new Promise<WiimResponse>((resolve, reject) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -207,6 +257,9 @@ export async function wiimRequest(
     });
     req.end();
   });
+
+  // Release the device slot once the request settles (resolve/reject/timeout).
+  return p.finally(release);
 }
 
 /** Detect an image MIME type from the leading magic bytes (some sources — e.g.
