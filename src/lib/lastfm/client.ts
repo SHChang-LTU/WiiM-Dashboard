@@ -101,7 +101,12 @@ export async function updateNowPlaying(creds: LastfmCreds, t: ScrobbleTrack): Pr
   await call("track.updateNowPlaying", p, creds, true);
 }
 
-export async function scrobble(creds: LastfmCreds, t: ScrobbleTrack): Promise<void> {
+export interface ScrobbleResult {
+  ignored: boolean;
+  reason?: string; // Last.fm's ignoredMessage when it silently drops the scrobble
+}
+
+export async function scrobble(creds: LastfmCreds, t: ScrobbleTrack): Promise<ScrobbleResult> {
   const p: Record<string, string> = {
     artist: t.artist,
     track: t.track,
@@ -109,7 +114,16 @@ export async function scrobble(creds: LastfmCreds, t: ScrobbleTrack): Promise<vo
   };
   if (t.album) p.album = t.album;
   if (t.duration && t.duration > 0) p.duration = String(Math.round(t.duration));
-  await call("track.scrobble", p, creds, true);
+  const data = await call("track.scrobble", p, creds, true);
+  // Last.fm returns HTTP 200 even when it SILENTLY drops a scrobble — e.g. artist
+  // "Various Artists" (compilations), or a timestamp too far off. The only signal
+  // is `scrobbles.@attr.ignored`, so surface it instead of reporting success.
+  const sc = data.scrobbles as
+    | { "@attr"?: { ignored?: unknown }; scrobble?: { ignoredMessage?: { "#text"?: unknown } } }
+    | undefined;
+  const ignored = Number(sc?.["@attr"]?.ignored ?? 0) > 0;
+  const reason = sc?.scrobble?.ignoredMessage?.["#text"];
+  return { ignored, reason: typeof reason === "string" && reason.trim() ? reason.trim() : undefined };
 }
 
 /** Whether `username` has loved this track (track.getInfo — public, unsigned). */

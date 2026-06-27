@@ -125,14 +125,18 @@ async function processDevice(id: string, host: string, creds: lastfm.LastfmCreds
     if (eligible) {
       prev.scrobbled = true; // mark first to avoid double-submit on overlap
       try {
-        await lastfm.scrobble(creds, {
+        const r = await lastfm.scrobble(creds, {
           artist,
           track: title,
           album,
           duration: prev.duration > 0 ? prev.duration : undefined,
           timestamp: prev.startedAt,
         });
-        log(`scrobbled ✓ ${artist} — ${title}`);
+        // Last.fm returns 200 OK but silently drops some scrobbles (e.g. artist
+        // "Various Artists"). Don't claim success then — and don't retry, it'll
+        // just be dropped again.
+        if (r.ignored) log(`✗ Last.fm ignored "${artist} — ${title}": ${r.reason ?? "unknown reason"}`);
+        else log(`scrobbled ✓ ${artist} — ${title}`);
       } catch (e) {
         prev.scrobbled = false; // retry next tick
         log("scrobble failed:", (e as Error)?.message ?? e);
