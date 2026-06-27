@@ -91,6 +91,8 @@ better-sqlite3 (users, sessions, devices, settings)
 
 Every 15 s it polls each device whose `scrobbleDevices[id]` flag is set. On a track change it sends `track.updateNowPlaying`; it then sends `track.scrobble` once Last.fm's eligibility rule is met (track longer than 30 s **and** played for at least half its length or 4 minutes, whichever comes first). Per-track-instance dedup plus a backward-position check handle replays.
 
+Last.fm returns `HTTP 200` even when it *silently drops* a scrobble (e.g. artist `"Various Artists"`, its compilation anti-spam rule), so `scrobble()` inspects the response's `scrobbles.@attr.ignored` count and the poller logs the real outcome rather than a false success — and does not retry an ignored play, since a re-submit would be dropped again.
+
 > **Why scrobbling, not the WiiM heart?** The WiiM HTTP API has **no native favorite/like command** — the app's heart calls each streaming service's own cloud API, which the server can't reach. So "Love" on the Now Playing card is implemented via `track.love`/`track.unlove` instead.
 
 ### Sleep timer

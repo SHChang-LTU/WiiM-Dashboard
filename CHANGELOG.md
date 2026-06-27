@@ -3,6 +3,11 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.6] — 2026-06-27
+
+### Fixed
+- **Last.fm scrobbler reported success for plays it never recorded** — Last.fm returns `HTTP 200` even when it *silently drops* a scrobble (most commonly when the artist is `"Various Artists"`, its anti-spam rule for compilation albums). The client never inspected the `ignored` field in the response, so the log showed `scrobbled ✓` for tracks that never reached your profile. The scrobbler now reads `scrobbles.@attr.ignored` and logs the real outcome (`✗ Last.fm ignored …: <reason>`) instead of a false success — and skips retrying, since a re-submit would be dropped again. (Tracks with a real artist were unaffected and continue to scrobble; Last.fm genuinely will not accept `"Various Artists"`.)
+
 ## [0.3.5] — 2026-06-27
 
 ### Fixed

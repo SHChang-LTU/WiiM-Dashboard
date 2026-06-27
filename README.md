@@ -210,6 +210,8 @@ The dashboard can scrobble your listening to [Last.fm](https://www.last.fm/) fro
 The scrobbler sends `track.updateNowPlaying` on each track change and scrobbles once Last.fm's eligibility rule is met (track longer than 30s, played at least half its length or 4 minutes).
 
 > Because it reads the device directly, it scrobbles **all** sources — including vinyl/optical/USB/DLNA that streaming apps can't see. The flip side: if a streaming app (e.g. the Spotify or TIDAL app) already scrobbles the same playback, enable **only one** of them for that device to avoid duplicate scrobbles.
+>
+> One Last.fm quirk to know: it **silently refuses** scrobbles whose artist is `"Various Artists"` (its anti-spam rule for compilations), so those tracks never appear on your profile no matter what — the server log notes them as `✗ Last.fm ignored …`. Tracks with a real artist scrobble normally.
 
 **Love button** — the ❤ on the Now Playing card loves/unloves the current track on Last.fm. WiiM's HTTP API has no native favorite/like command, so Love is wired through Last.fm rather than the streaming service.
 

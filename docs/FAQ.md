@@ -23,6 +23,9 @@ Local / NAS / USB files often don't expose embedded cover art through the WiiM A
 ## Can it tell me if a track is AI-generated?
 **No.** The dashboard only shows what the device/streaming service reports (title, artist, album, quality). None of them expose an "AI-generated" flag, and detecting AI music from the audio alone is an unsolved problem. If services start tagging it in metadata, it could be surfaced then.
 
+## Why don't some tracks scrobble to Last.fm (e.g. compilations)?
+Last.fm **silently refuses** scrobbles whose artist is `"Various Artists"` — its long-standing anti-spam rule for compilation albums. When the track's metadata is tagged that way (common with "Greatest Hits" / various-artist compilations), that's the artist the WiiM passes through and the dashboard sees, so Last.fm drops the scrobble and it never appears on your profile. The dashboard can't override this. Tracks with a real artist scrobble normally. (As of 0.3.6 the server log shows `✗ Last.fm ignored …` with the reason, instead of a misleading ✓, so you can tell exactly what happened.)
+
 ## Is my data / my listening private?
 Yes. Everything runs on your own machine; the SQLite database lives in a Docker volume you control. Last.fm credentials are stored server-side and never sent to the browser. The only outbound calls are: to your WiiM (LAN), optional Last.fm scrobbling (if you enable it), synced lyrics (LRCLIB, if a track has them), and the optional album-art lookup (iTunes — `WIIM_ARTWORK_FALLBACK=false` turns it off).
 
