@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.3] — 2026-06-27
+
+Easier self-hosting — Unraid support and bind-mount-friendly data directories.
+
+### Added
+- **Unraid template** — a Community Applications template ([`unraid/wiim-dashboard.xml`](unraid/wiim-dashboard.xml)) for quick setup on Unraid, pulling the image from Docker Hub. The CA Auto Update plugin keeps it current.
+
+### Changed
+- **Bind-mount-friendly data directory** — the container now fixes the data directory's ownership on startup, then drops to a non-root user (via `gosu`), so a host bind-mount like Unraid's `/mnt/user/appdata` works out of the box with no manual `chown`. The default named-volume setup is unchanged, and the app still never runs as root.
+
 ## [0.3.2] — 2026-06-27
 
 Album art for local files, plus friendlier docs for newcomers.
