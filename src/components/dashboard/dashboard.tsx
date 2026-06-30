@@ -18,6 +18,7 @@ import { EqCard } from "./eq-card";
 import { SubCard } from "./sub-card";
 import { TempCard } from "./temp-card";
 import { PresetCard } from "./preset-card";
+import { LibraryCard } from "./library-card";
 import { DeviceInfoCard } from "./device-info-card";
 import { LastfmStatsCard } from "./lastfm-stats-card";
 import { Card } from "@/components/ui/card";
@@ -139,6 +140,10 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
 
             {vis("presets") && snap.presets && snap.presets.length > 0 && (
               <PresetCard deviceId={did} presets={snap.presets} onChanged={refresh} />
+            )}
+
+            {vis("nasMedia") && settings?.dlna?.descUrl && (
+              <LibraryCard deviceId={did} onChanged={refresh} />
             )}
 
             {/* Full per-source Graphic + Parametric EQ (self-hides if unsupported) */}

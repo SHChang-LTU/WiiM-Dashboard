@@ -13,6 +13,8 @@ import {
   Radio,
   Heart,
   Link as LinkIcon,
+  Server,
+  Plug,
 } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,13 +22,14 @@ import { Input, Field } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/toast";
-import { apiSend, ApiError } from "@/lib/client/api";
+import { apiGet, apiSend, ApiError } from "@/lib/client/api";
 import { useSettings, useDevices, type CardVisibility } from "@/lib/client/hooks";
 
 export function SettingsView({ totpEnabled }: { totpEnabled: boolean }) {
   return (
     <div className="space-y-5">
       <DisplayCards />
+      <MediaServerSettings />
       <Scrobbling />
       <ChangePassword />
       <TwoFactor enabled={totpEnabled} />
@@ -228,6 +231,7 @@ function DisplayCards() {
     { key: "sub", label: "Sub-out" },
     { key: "temperature", label: "Temperature" },
     { key: "device", label: "Device info" },
+    { key: "nasMedia", label: "Library" },
   ];
 
   async function toggle(key: keyof CardVisibility, value: boolean) {
@@ -258,6 +262,78 @@ function DisplayCards() {
             />
           </div>
         ))}
+      </div>
+    </Card>
+  );
+}
+
+function MediaServerSettings() {
+  const toast = useToast();
+  const { settings, mutate } = useSettings();
+  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  const val = url ?? settings?.dlna?.descUrl ?? "";
+
+  async function save(): Promise<boolean> {
+    setBusy(true);
+    try {
+      await apiSend("/api/settings", "PATCH", { dlna: { descUrl: val.trim() } });
+      await mutate();
+      setUrl(null);
+      return true;
+    } catch (e) {
+      toast((e as ApiError).message || "Could not save", "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test() {
+    setTesting(true);
+    try {
+      // Persist first so the probe hits the URL just entered.
+      await apiSend("/api/settings", "PATCH", { dlna: { descUrl: val.trim() } });
+      await mutate();
+      setUrl(null);
+      const r = await apiGet<{ albums: unknown[] }>("/api/nas/browse");
+      toast(`Connected — found ${r.albums.length} album${r.albums.length === 1 ? "" : "s"}`, "success");
+    } catch (e) {
+      toast((e as ApiError).message || "Could not reach the media server", "error");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <CardHeader icon={<Server className="size-4" />} title="Media server (DLNA)" className="px-0 pt-0" />
+      <div className="mt-4 space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Browse a NAS music library (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) and play albums
+          on your devices. Paste your media server&apos;s device-description XML URL — find it in the
+          server&apos;s DLNA/UPnP settings.
+        </p>
+        <Field label="Description URL" hint="e.g. http://192.168.1.10:8200/rootDesc.xml">
+          <Input
+            value={val}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="http://192.168.1.10:8200/rootDesc.xml"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => void save()} disabled={busy || testing}>
+            {busy ? <Spinner /> : <Save className="size-5" />} Save
+          </Button>
+          <Button variant="secondary" onClick={() => void test()} disabled={busy || testing || !val.trim()}>
+            {testing ? <Spinner /> : <Plug className="size-5" />} Test connection
+          </Button>
+        </div>
       </div>
     </Card>
   );

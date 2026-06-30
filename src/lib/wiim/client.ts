@@ -94,15 +94,17 @@ export function assertAllowedHost(host: string): void {
   }
 }
 
-interface ResolvedTarget {
+export interface ResolvedTarget {
   ip: string;
   family: 4 | 6;
   isLiteral: boolean;
   isPrivate: boolean;
 }
 
-/** Resolve a host to a concrete IP we can pin the connection to. */
-async function resolveTarget(host: string): Promise<ResolvedTarget> {
+/** Resolve a host to a concrete IP we can pin the connection to. Shared with
+ *  the DLNA transport (src/lib/dlna/transport.ts) so it gets the same
+ *  DNS-rebind-safe pinning the WiiM transport uses. */
+export async function resolveTarget(host: string): Promise<ResolvedTarget> {
   const literalFamily = net.isIP(host);
   if (literalFamily) {
     return { ip: host, family: literalFamily as 4 | 6, isLiteral: true, isPrivate: isPrivateIp(host) };
@@ -131,7 +133,7 @@ type LookupCb = (
 ) => void;
 
 /** Custom lookup that pins every connection attempt to one validated IP. */
-function pinnedLookup(ip: string, family: 4 | 6) {
+export function pinnedLookup(ip: string, family: 4 | 6) {
   return (_hostname: string, options: unknown, callback?: LookupCb): void => {
     const cb = (typeof options === "function" ? options : callback) as LookupCb;
     const opts = typeof options === "object" && options ? (options as { all?: boolean }) : null;

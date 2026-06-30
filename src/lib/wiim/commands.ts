@@ -407,3 +407,10 @@ export async function playPreset(ip: string, index: number): Promise<void> {
   const text = await send(ip, command);
   assertAccepted(text, command);
 }
+
+/** Play an m3u/playlist URL on the device, starting at the given track index. */
+export async function playUrlList(ip: string, url: string, index: number): Promise<void> {
+  const command = Cmd.playPlaylist(url, index);
+  const text = await send(ip, command);
+  assertAccepted(text, command);
+}

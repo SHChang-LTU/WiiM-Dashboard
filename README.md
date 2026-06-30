@@ -40,6 +40,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 - [Public access / reverse proxy](#public-access--reverse-proxy)
 - [Cloudflare Turnstile](#cloudflare-turnstile)
 - [Last.fm scrobbling](#lastfm-scrobbling)
+- [NAS music library (DLNA)](#nas-music-library-dlna)
 - [Security model](#security-model)
 - [Development](#development)
 - [Project structure](#project-structure)
@@ -63,6 +64,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 | **Last.fm scrobbling** | Server-side background scrobbler that runs **even with the dashboard closed**; per-device toggle; scrobbles every source (incl. vinyl/optical/USB) |
 | **Last.fm Love** | ❤ button on the Now Playing card — loves/unloves the track on Last.fm (WiiM has no native favorite command) |
 | **Last.fm stats** | Top artists & tracks (7 days / month / all-time) + total scrobbles, when Last.fm is connected |
+| **NAS music library** | Browse a DLNA/UPnP media server (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) as an album-art grid and play a whole album on any device |
 | **Sleep timer** | 🌙 set a 15–120 min timer that pauses the device — runs **server-side**, so it fires even with the dashboard closed |
 | **Volume** | Slider **plus −/+ buttons** (touch-friendly on iPad) |
 | **Presets** | Square artwork tiles in a 2×6 grid (count auto-detected per model), tap to play; names + art from `getPresetInfo`; horizontal-scroll on phones |
@@ -177,6 +179,7 @@ All configuration is environment variables (see `.env.example`):
 | `WIIM_CLIENT_CERT_PATH` / `WIIM_CLIENT_KEY_PATH` | — | Optional mTLS override (a working LinkPlay cert is embedded) |
 | `WIIM_DEVICE_CONCURRENCY` | `4` | Max concurrent `httpapi` requests per device — lower to `1`–`2` for older/flaky devices that choke on parallel bursts |
 | `WIIM_ARTWORK_FALLBACK` | `true` | Look up cover art by artist + album (iTunes, keyless) when a track has no embedded art (e.g. local files); set `false` to disable external lookups |
+| `MEDIA_CALLBACK_ORIGIN` | — | LAN URL the device fetches the NAS m3u from (e.g. `http://192.168.1.5:39446`). Only needed when you reach the dashboard via a public https domain — see [NAS music library](#nas-music-library-dlna) |
 
 The dashboard's polling interval, Turnstile keys and per-device source names are managed in the **Settings** and **Devices** pages and stored in SQLite. **Last.fm scrobbling** is configured entirely in-app (Settings → Last.fm Scrobbling) — no new env var is needed.
 
@@ -216,6 +219,20 @@ The scrobbler sends `track.updateNowPlaying` on each track change and scrobbles 
 **Love button** — the ❤ on the Now Playing card loves/unloves the current track on Last.fm. WiiM's HTTP API has no native favorite/like command, so Love is wired through Last.fm rather than the streaming service.
 
 Your API secret and session key are stored in the SQLite database server-side and are never sent to the browser.
+
+## NAS music library (DLNA)
+
+Browse a NAS/UPnP media server and play whole albums on your devices — the WiiM HTTP API can switch inputs and trigger presets but can't browse content, so the dashboard talks to your media server directly over UPnP.
+
+1. Enable the **DLNA / Media Server** feature on your NAS (Synology *Media Server*, MiniDLNA, Asset UPnP, Plex/Jellyfin DLNA, …).
+2. In **Settings → Media server (DLNA)**, paste the server's **device-description XML URL** (e.g. `http://192.168.1.10:8200/rootDesc.xml`) and click **Test connection**.
+3. A **Library** card appears on the dashboard — open it, pick an album, and it plays on the selected device.
+
+**How playback works:** the dashboard builds an `.m3u` of the album's track URLs, hosts it at a short-lived signed URL, and tells the device to play it (`setPlayerCmd:playlist`). The device then streams each track **directly from the NAS**.
+
+> **Reverse-proxy note.** The device fetches that m3u over the LAN, so it must reach the dashboard at a LAN address. If you browse the dashboard over its LAN IP this works automatically. If you reach it through a **public https domain**, the device can't resolve/reach that origin — set `MEDIA_CALLBACK_ORIGIN` to the dashboard's LAN URL (e.g. `http://192.168.1.5:39446`).
+
+All media-server requests (browse, art, playlist) are SSRF-guarded to the configured LAN host, exactly like device traffic. The m3u URL is the one route the device fetches without a session; it's protected by a signed, ~5-minute HMAC token that only ever yields your own album's LAN track URLs.
 
 ## Security model
 

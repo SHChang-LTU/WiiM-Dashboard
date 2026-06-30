@@ -42,8 +42,24 @@ Returns identity + capabilities. Fields this app reads:
 | Volume (0–100) | `setPlayerCmd:vol:<n>` |
 | Mute | `setPlayerCmd:mute:<0\|1>` |
 | Loop/shuffle | `setPlayerCmd:loopmode:<n>` (see below) |
+| Play m3u/playlist URL | `setPlayerCmd:playlist:<url>:<index>` _(community-verified)_ |
 
 `getPlayerStatusEx` notes: `status` = `play|pause|stop|load`; `Title`/`Artist`/`Album` are **hex-encoded UTF-8** (and may contain HTML entities such as `&amp;`, which the app decodes); `curpos`/`totlen` are ms; `mode` = numeric source; `vol`, `mute`, `eq`, `loop`.
+
+### Play a URL playlist (`setPlayerCmd:playlist`) _(community-verified)_
+
+`setPlayerCmd:playlist:<url>:<index>` points the device at an `.m3u`/`.m3u8`
+playlist URL; the device fetches it and streams each track in turn, starting at
+zero-based `<index>`. Not in the official PDF; verified against `python-linkplay`
+and field reports.
+
+This project uses it to play a NAS/DLNA album: the dashboard hosts a generated
+m3u of the album's track URLs (`GET /api/nas/m3u?token=…`) and sends this command
+so the device streams each track directly from the NAS. The command string is
+URL-encoded by `encodeCommand` (`?`/`&`/`#`/space), so the embedded m3u URL —
+including its `?token=` — survives; the device splits the URL from `<index>` on
+the final `:`. The m3u host must be a **LAN-reachable** origin the device can
+reach (see `MEDIA_CALLBACK_ORIGIN`), not the public reverse-proxy domain.
 
 ### `getMetaInfo` → `metaData`
 

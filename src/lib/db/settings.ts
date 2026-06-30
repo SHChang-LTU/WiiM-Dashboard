@@ -48,6 +48,7 @@ export interface CardVisibility {
   sub: boolean;
   temperature: boolean;
   device: boolean;
+  nasMedia: boolean;
 }
 
 export const DEFAULT_CARDS: CardVisibility = {
@@ -59,6 +60,7 @@ export const DEFAULT_CARDS: CardVisibility = {
   sub: true,
   temperature: true,
   device: true,
+  nasMedia: true,
 };
 
 export const SettingKeys = {
@@ -67,6 +69,7 @@ export const SettingKeys = {
   sourceLabels: "sourceLabels",
   cards: "cards",
   lastfm: "lastfm",
+  dlna: "dlna",
 } as const;
 
 /**
@@ -100,6 +103,27 @@ export function getLastfm(): LastfmSettings {
 export function setLastfm(patch: Partial<LastfmSettings>): LastfmSettings {
   const next = { ...getLastfm(), ...patch };
   setSetting(SettingKeys.lastfm, next);
+  return next;
+}
+
+/**
+ * UPnP/DLNA media server. `descUrl` is the device-description XML URL of the
+ * NAS media server (e.g. http://192.168.1.10:8200/rootDesc.xml), entered in
+ * Settings. Empty until configured; gates the dashboard's Library entry point.
+ */
+export interface DlnaSettings {
+  descUrl: string;
+}
+
+export const DEFAULT_DLNA: DlnaSettings = { descUrl: "" };
+
+export function getDlna(): DlnaSettings {
+  return { ...DEFAULT_DLNA, ...getSetting<Partial<DlnaSettings>>(SettingKeys.dlna, {}) };
+}
+
+export function setDlna(patch: Partial<DlnaSettings>): DlnaSettings {
+  const next = { ...getDlna(), ...patch };
+  setSetting(SettingKeys.dlna, next);
   return next;
 }
 

@@ -6,6 +6,8 @@ import {
   getSetting,
   setSetting,
   getLastfm,
+  getDlna,
+  setDlna,
   SettingKeys,
   DEFAULT_CARDS,
   type TurnstileSettings,
@@ -41,8 +43,14 @@ const PatchSchema = z.object({
       sub: z.boolean(),
       temperature: z.boolean(),
       device: z.boolean(),
+      nasMedia: z.boolean(),
     })
     .partial()
+    .optional(),
+  dlna: z
+    .object({
+      descUrl: z.string().trim().max(2048),
+    })
     .optional(),
 });
 
@@ -70,6 +78,7 @@ export async function GET(req: Request) {
       username: lf.username,
       scrobbleDevices: lf.scrobbleDevices,
     },
+    dlna: { descUrl: getDlna().descUrl },
   });
 }
 
@@ -99,6 +108,10 @@ export async function PATCH(req: Request) {
   if (parsed.data.cards) {
     const current = { ...DEFAULT_CARDS, ...getSetting<Partial<CardVisibility>>(SettingKeys.cards, {}) };
     setSetting(SettingKeys.cards, { ...current, ...parsed.data.cards });
+  }
+
+  if (parsed.data.dlna) {
+    setDlna({ descUrl: parsed.data.dlna.descUrl });
   }
 
   return json({ ok: true });

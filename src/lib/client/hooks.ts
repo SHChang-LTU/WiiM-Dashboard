@@ -33,6 +33,7 @@ export type CardVisibility = {
   sub: boolean;
   temperature: boolean;
   device: boolean;
+  nasMedia: boolean;
 };
 
 export type LastfmStatus = {
@@ -48,6 +49,7 @@ type SettingsResponse = {
   app: { pollIntervalMs: number };
   cards: CardVisibility;
   lastfm: LastfmStatus;
+  dlna: { descUrl: string };
 };
 
 export function useSettings() {

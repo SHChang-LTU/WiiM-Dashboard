@@ -53,6 +53,12 @@ export const Cmd = {
   // Presets (favourites). Count from getStatusEx `preset_key`.
   getPresets: "getPresetInfo",
   playPreset: (n: number) => `MCUKeyShortClick:${Math.trunc(n)}`,
+
+  // Play an m3u/playlist URL starting at <index> (community-verified; not in the
+  // official PDF). The device fetches the URL then streams each track. The URL
+  // is URL-encoded by encodeCommand, so an embedded "?token=…" survives.
+  playPlaylist: (url: string, index: number) =>
+    `setPlayerCmd:playlist:${url}:${Math.trunc(index)}`,
 } as const;
 
 /** Playback status values from getPlayerStatusEx `status`. */
