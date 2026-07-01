@@ -45,6 +45,20 @@ better-sqlite3 (users, sessions, devices, settings)
 | `discovery.ts` | SSDP multicast + direct IP-range scan |
 | `linkplay-cert.ts` | The shared public LinkPlay mTLS client cert/key |
 
+### `src/lib/dlna/` — NAS music library (server-only)
+
+Browses a UPnP/DLNA media server and plays its content on a WiiM. The WiiM HTTP API can't browse content, so the dashboard talks to the media server directly.
+
+| File | Responsibility |
+|---|---|
+| `transport.ts` | Plain-HTTP transport to the media server, reusing the WiiM **SSRF guard** (resolve → private-IP check → pin) and constrained to the one configured media host. No mTLS — DLNA speaks ordinary HTTP SOAP |
+| `description.ts` | Resolves + caches the server's `ContentDirectory` control URL from its device-description XML |
+| `contentdirectory.ts` | ContentDirectory:1 client — tolerant DIDL-Lite parsing; `browseFolder` (sub-folders + tracks for `/api/nas/list`) and `albumTracks` (a container's audio tracks, filtering out cover-art/video items) |
+| `avtransport.ts` | UPnP **AVTransport:1** control-point for the WiiM's own MediaRenderer (plain HTTP on :49152) — `SetAVTransportURI` / `SetNextAVTransportURI` / `Play` / `GetPositionInfo`, with DIDL metadata so the device reports real title/artist/album/art |
+| `nas-queue.ts` | In-process per-device play queue + advancer (background job) — see [Background jobs](#background-jobs) |
+
+**Why AVTransport, not `setPlayerCmd:playlist`?** The httpapi playlist push ignores the start index and resumes a stale playlist cursor (playback starts mid-album), so NAS playback drives the renderer directly instead. Browse/art requests are SSRF-guarded to the configured media host; album art is proxied via `/api/nas/art` so the browser never contacts the NAS. Configured in **Settings → Media server (DLNA)** with the server's device-description URL.
+
 ### `src/lib/lastfm/` — Last.fm client (server-only)
 
 `client.ts`: a minimal Audioscrobbler 2.0 client with correct `api_sig` MD5 signing. Covers the desktop auth flow (`getToken` → user authorizes → `getSession`; the session key never expires), `updateNowPlaying`, `scrobble`, `love`/`unlove`, and `getTrackLoved` (`track.getInfo`). The app's API key/secret + the session key live in the `lastfm` settings row and are **server-only** — only the public API key, plus `hasSecret`/`connected`/`username`/`scrobbleDevices`, are ever sent to the client.
@@ -98,6 +112,10 @@ Last.fm returns `HTTP 200` even when it *silently drops* a scrobble (e.g. artist
 ### Sleep timer
 
 `src/lib/sleep/timer.ts` keeps per-device sleep timers in the Node process. Setting one (15–120 min) schedules a `pause`; the snapshot exposes the expiry so the Now Playing button shows a live countdown. Because it's server-side, it fires even with no browser open. Managed via `/api/devices/[id]/sleep` (GET status, POST set/cancel).
+
+### NAS play-queue advancer
+
+`src/lib/dlna/nas-queue.ts` keeps a per-device UPnP play queue in the Node process. UPnP AVTransport only holds a *current* + one *next* URI, so a lightweight interval polls `GetPositionInfo` and, as the album advances, loads the following track via `SetNextAVTransportURI` — giving ordered, gapless, whole-album playback that starts at the first track. It self-terminates when playback leaves the queue (the user switches source), and is the source of truth for the proxied cover art shown in Now Playing (the device reports the NAS art host, which the device art route can't fetch).
 
 ## Capability detection
 

@@ -26,10 +26,34 @@ export interface Album {
 }
 
 export interface Track {
+  id: string | null;
   title: string | null;
   artist: string | null;
+  albumArtUri: string | null;
   res: string;
   duration: number | null;
+}
+
+/** A navigable container (folder, album, artist, genre…) in the tree. */
+export interface Folder {
+  id: string;
+  title: string;
+  albumArtUri: string | null;
+}
+
+/** One track as shown in a folder listing (no stream URL — that stays server-side). */
+export interface FolderTrack {
+  id: string | null;
+  title: string | null;
+  artist: string | null;
+  albumArtUri: string | null;
+  duration: number | null;
+}
+
+/** Direct children of one container: sub-folders + playable tracks, in server order. */
+export interface FolderListing {
+  folders: Folder[];
+  tracks: FolderTrack[];
 }
 
 // --- XML helpers -------------------------------------------------------------
@@ -145,16 +169,42 @@ function parseAlbum(block: string, base: string): Album | null {
   };
 }
 
+/**
+ * Is this <item> an audio track (vs. cover art / video the server also exposes
+ * as items)? Prefer upnp:class; fall back to the res MIME. Unknown-both-ways is
+ * accepted so an under-tagged server never hides real music.
+ */
+function isAudioItem(block: string, resOpenTag: string): boolean {
+  const cls = (tag(block, "upnp:class") ?? "").toLowerCase();
+  if (cls.includes("audioitem")) return true;
+  if (cls.includes("imageitem") || cls.includes("videoitem")) return false;
+  const proto = (attr(resOpenTag, "protocolInfo") ?? "").toLowerCase();
+  if (proto.includes(":audio/")) return true;
+  if (proto.includes(":image/") || proto.includes(":video/")) return false;
+  return true;
+}
+
 function parseTrack(block: string, base: string): Track | null {
   const resOpen = /<res\b[^>]*>([\s\S]*?)<\/res>/i.exec(block);
   const res = absolute(resOpen ? decodeXml(resOpen[1]!.trim()) : null, base);
   if (!res) return null; // a track with no stream URL is useless to us
+  if (!isAudioItem(block, resOpen ? resOpen[0] : "")) return null; // skip cover art / video items
   return {
+    id: attr(openTagOf(block, "item"), "id"),
     title: tag(block, "dc:title"),
     artist: tag(block, "upnp:artist") ?? tag(block, "dc:creator"),
+    albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base),
     res,
     duration: parseDuration(resOpen ? attr(resOpen[0], "duration") : null),
   };
+}
+
+/** Any navigable <container> child — a folder, album, artist bucket, etc. */
+function parseFolder(block: string, base: string): Folder | null {
+  const id = attr(openTagOf(block, "container"), "id");
+  const title = tag(block, "dc:title");
+  if (!id || !title) return null;
+  return { id, title, albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base) };
 }
 
 // --- public API --------------------------------------------------------------
@@ -260,6 +310,47 @@ export async function albumTracks(albumId: string): Promise<Track[]> {
     if (returned < PAGE_SIZE) break;
   }
   return tracks;
+}
+
+/**
+ * Direct children of one container: its sub-folders and its playable tracks, in
+ * server order. Tracks are parsed identically to (and in the same order as)
+ * `albumTracks`, so a track's position here is a stable index the play route can
+ * use to re-select it from the container — no need to ship stream URLs to the
+ * browser or stuff object IDs into the m3u token.
+ */
+export async function browseFolder(objectId: string): Promise<FolderListing> {
+  const cd = await getContentDirectory();
+  const folders: Folder[] = [];
+  const tracks: FolderTrack[] = [];
+  for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
+    const inner =
+      `<ObjectID>${escapeXml(objectId)}</ObjectID>` +
+      `<BrowseFlag>BrowseDirectChildren</BrowseFlag>` +
+      `<Filter>*</Filter>` +
+      `<StartingIndex>${start}</StartingIndex>` +
+      `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
+      `<SortCriteria></SortCriteria>`;
+    const { didl, returned } = await soapCall("Browse", inner);
+    for (const b of blocks(didl, "container")) {
+      const f = parseFolder(b, cd.base);
+      if (f) folders.push(f);
+    }
+    for (const b of blocks(didl, "item")) {
+      const t = parseTrack(b, cd.base);
+      if (t) {
+        tracks.push({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          albumArtUri: t.albumArtUri,
+          duration: t.duration,
+        });
+      }
+    }
+    if (returned < PAGE_SIZE) break;
+  }
+  return { folders, tracks };
 }
 
 /** Escape a value placed in element text (object IDs can contain & < >). */

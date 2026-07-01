@@ -37,14 +37,6 @@ export const config = {
   wiimClientKeyPath: process.env.WIIM_CLIENT_KEY_PATH || "",
 
   /**
-   * LAN-reachable base URL the WiiM device uses to fetch the DLNA m3u playlist
-   * (e.g. http://192.168.1.5:39446). Distinct from APP_ORIGIN, which is the
-   * public reverse-proxy origin a LAN device usually can't reach over TLS/DNS.
-   * When unset, the play route derives it from the inbound request Host header.
-   */
-  mediaCallbackOrigin: process.env.MEDIA_CALLBACK_ORIGIN?.replace(/\/$/, "") || "",
-
-  /**
    * AUTH_SECRET — HMAC pepper for session-token hashing (see db/sessions.ts).
    * A DB leak alone can't forge sessions without it. Changing it logs everyone
    * out. Falls back in dev; never throws at import so the build can't break.

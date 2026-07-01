@@ -14,6 +14,7 @@ import {
 } from "./commands";
 import { detectService, inferAudioFormat } from "./now-playing-info";
 import { getSleep } from "@/lib/sleep/timer";
+import { getNasQueueArt } from "@/lib/dlna/nas-queue";
 import type { DeviceSnapshot, DeviceCapabilities } from "./types";
 
 export interface PollableDevice {
@@ -79,6 +80,15 @@ export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceS
     player.artist = player.artist ?? meta.artist;
     player.album = player.album ?? meta.album;
     if (player.title) player.title = tidyTrackTitle(player.title);
+    // NAS UPnP playback reports real title/artist/album natively. The device also
+    // reports the NAS art host, which the device art route can't fetch — so serve
+    // the active queue track's cover through the NAS art proxy instead.
+    let nasArtApplied = false;
+    const nasArt = getNasQueueArt(device.id);
+    if (nasArt?.art) {
+      player.albumArt = `/api/nas/art?url=${encodeURIComponent(nasArt.art)}`;
+      nasArtApplied = true;
+    }
     // Detect the streaming service (mode + raw art host) and infer the format.
     player.service = detectService(player.sourceMode, meta.albumArt);
     player.audio = inferAudioFormat(
@@ -95,7 +105,7 @@ export async function getDeviceSnapshot(device: PollableDevice): Promise<DeviceS
     // Show art when the device provides it, or when we can look one up by
     // artist + album (local/NAS files often expose no embedded cover). The art
     // route resolves the actual image either way.
-    if (meta.albumArt || (player.artist && player.album)) {
+    if (!nasArtApplied && (meta.albumArt || (player.artist && player.album))) {
       const sig = createHash("sha1")
         .update(`${player.title ?? ""}|${player.artist ?? ""}|${player.album ?? ""}|${meta.albumArt ?? "lookup"}`)
         .digest("hex")

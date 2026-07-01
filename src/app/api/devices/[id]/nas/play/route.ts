@@ -1,33 +1,35 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { guard, apiError } from "@/lib/api";
+import { guard, apiError, json } from "@/lib/api";
 import { parseBody } from "@/lib/validate";
-import { resolveDevice, runDevice } from "@/lib/device-route";
-import { playUrlList } from "@/lib/wiim/commands";
-import { signM3uToken } from "@/lib/dlna/token";
-import { config } from "@/lib/config";
+import { resolveDevice } from "@/lib/device-route";
+import { albumTracks } from "@/lib/dlna/contentdirectory";
+import { startNasQueue } from "@/lib/dlna/nas-queue";
+import { DlnaError, dlnaErrorStatus } from "@/lib/dlna/transport";
+import { WiimError } from "@/lib/wiim/client";
+import type { AvTrack } from "@/lib/dlna/avtransport";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
-const Schema = z.object({ object: z.string().trim().min(1).max(1024) });
+const Schema = z.object({
+  object: z.string().trim().min(1).max(1024),
+  // Optional subset of the container's tracks, by their position in the folder
+  // listing. Omitted → play the whole container, in order.
+  indices: z.array(z.number().int().min(0).max(100000)).max(2000).optional(),
+  // Album/folder name for the tracks' DIDL metadata (shown as the album in Now
+  // Playing). Track title/artist/art come from the server-side browse.
+  meta: z.object({ album: z.string().max(512) }).optional(),
+});
 
 /**
- * The LAN-reachable base URL the device should fetch the m3u from. Prefer the
- * explicit MEDIA_CALLBACK_ORIGIN; otherwise derive it from the inbound request
- * (correct when the user is browsing over the LAN IP). This is the most common
- * point of failure for reverse-proxy setups — hence the override.
+ * Play a NAS folder/album (or a selection) on the device via UPnP AVTransport.
+ * We drive the renderer directly (SetAVTransportURI + Play, then keep the "next"
+ * URI loaded as it advances) rather than pushing an httpapi playlist, because
+ * that firmware path ignores the start index and resumes at a stale cursor. This
+ * plays from the first track, in order, with native metadata + cover art.
  */
-function callbackOrigin(req: Request): string | null {
-  if (config.mediaCallbackOrigin) return config.mediaCallbackOrigin;
-  const host = req.headers.get("host");
-  if (!host) return null;
-  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
-  return `${proto}://${host}`;
-}
-
-/** Play a NAS album: host a signed m3u of its tracks, point the device at it. */
 export async function POST(req: Request, { params }: Params) {
   const g = await guard(req, { mutation: true });
   if (g instanceof NextResponse) return g;
@@ -37,11 +39,30 @@ export async function POST(req: Request, { params }: Params) {
   const parsed = await parseBody(req, Schema);
   if (!parsed.ok) return parsed.res;
 
-  const origin = callbackOrigin(req);
-  if (!origin) return apiError(400, "Cannot determine callback origin", "NO_CALLBACK_ORIGIN");
+  const album = parsed.data.meta?.album ?? "";
 
-  const token = signM3uToken(parsed.data.object);
-  const m3uUrl = `${origin}/api/nas/m3u?token=${token}`;
+  try {
+    const all = await albumTracks(parsed.data.object);
+    const chosen = parsed.data.indices
+      ? parsed.data.indices.map((i) => all[i]).filter((t): t is (typeof all)[number] => t != null)
+      : all;
+    if (chosen.length === 0) return apiError(404, "No playable tracks", "NO_TRACKS");
 
-  return runDevice(() => playUrlList(r.device.host, m3uUrl, 0));
+    const queue: AvTrack[] = chosen.map((t) => ({
+      res: t.res,
+      title: t.title,
+      artist: t.artist,
+      album,
+      art: t.albumArtUri,
+      duration: t.duration,
+    }));
+
+    await startNasQueue(r.device.id, r.device.host, queue);
+    return json({ ok: true, tracks: queue.length });
+  } catch (e) {
+    if (e instanceof DlnaError) return apiError(dlnaErrorStatus(e.code), e.message, e.code);
+    if (e instanceof WiimError) return apiError(502, e.message, e.code);
+    const msg = e instanceof Error ? e.message : "Playback failed";
+    return apiError(502, msg, "PLAYBACK");
+  }
 }

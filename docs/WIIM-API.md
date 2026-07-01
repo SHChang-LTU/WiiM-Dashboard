@@ -53,13 +53,14 @@ playlist URL; the device fetches it and streams each track in turn, starting at
 zero-based `<index>`. Not in the official PDF; verified against `python-linkplay`
 and field reports.
 
-This project uses it to play a NAS/DLNA album: the dashboard hosts a generated
-m3u of the album's track URLs (`GET /api/nas/m3u?token=…`) and sends this command
-so the device streams each track directly from the NAS. The command string is
-URL-encoded by `encodeCommand` (`?`/`&`/`#`/space), so the embedded m3u URL —
-including its `?token=` — survives; the device splits the URL from `<index>` on
-the final `:`. The m3u host must be a **LAN-reachable** origin the device can
-reach (see `MEDIA_CALLBACK_ORIGIN`), not the public reverse-proxy domain.
+**Caveat (WiiM Ultra, fw 5.x): the `<index>` is ignored.** In testing, this
+command starts playback at a *stale internal playlist cursor* rather than the
+requested index (so an album starts mid-way), and the cursor can't be reset —
+not by `stop`, `playindex`, `switchindex`, a `.m3u` extension, or unique
+playlist content. So NAS/DLNA playback does **not** use this command; it drives
+the device's own UPnP **AVTransport** renderer (`SetAVTransportURI` +
+`SetNextAVTransportURI`), which plays the exact track from the start and reports
+real title/artist/album metadata. See `src/lib/dlna/avtransport.ts`.
 
 ### `getMetaInfo` → `metaData`
 

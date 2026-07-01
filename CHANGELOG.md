@@ -3,6 +3,11 @@
 All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **NAS music library (DLNA)** — browse a UPnP/DLNA media server (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin, Universal Media Server, …) **folder by folder** from a new **Library** card, and play a whole album, a hand-picked set of tracks, or a single track on any device. Set it up in **Settings → Media server (DLNA)** with your server's device-description URL. Track/album names and cover art come straight from your server (art is proxied, so the browser never contacts the NAS). Playback is driven over the WiiM's own UPnP AVTransport renderer, so it **starts at the first track** and plays through in order — the device's httpapi playlist command ignores the start index and resumes mid-album, so it isn't used.
+
 ## [0.3.6] — 2026-06-27
 
 ### Fixed
