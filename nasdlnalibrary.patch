@@ -1,0 +1,1477 @@
+From 2a67be9a83101d5c2590a58f22ce4c37a3f9c2aa Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 30 Jun 2026 07:42:57 +0000
+Subject: [PATCH] Add NAS/DLNA library browsing and album playback
+
+Browse a UPnP/DLNA media server (Synology, MiniDLNA, Asset UPnP,
+Plex/Jellyfin) as an album-art grid and play a whole album on a WiiM
+device. The WiiM HTTP API can't browse content, so the dashboard talks to
+the media server directly over UPnP SOAP and drives playback with the
+LinkPlay setPlayerCmd:playlist command (the device fetches a generated
+m3u, then streams each track straight from the NAS).
+
+- New src/lib/dlna/ client: SSRF-pinned plain-HTTP transport that reuses
+  the WiiM resolveTarget/pinnedLookup guard (now exported); device
+  description -> ContentDirectory resolution; Search with a shallow-Browse
+  fallback; a tolerant DIDL-Lite parser; an Extended-M3U builder; and
+  short-TTL HMAC tokens for the playlist callback.
+- Routes: GET /api/nas/browse, GET /api/nas/art (pinned image proxy),
+  POST /api/devices/[id]/nas/play, and a deliberately unauthenticated,
+  token-guarded GET /api/nas/m3u that the device fetches over the LAN.
+- Settings: media-server description URL + a Library card toggle; new
+  MEDIA_CALLBACK_ORIGIN env var for reverse-proxy setups.
+- UI: a Library entry card and an album-grid browse dialog.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GnJsrMMFTRRPejwUerR5qL
+---
+ .env.example                               |   8 +
+ README.md                                  |  17 ++
+ docs/WIIM-API.md                           |  16 ++
+ src/app/api/devices/[id]/nas/play/route.ts |  47 ++++
+ src/app/api/nas/art/route.ts               |  70 ++++++
+ src/app/api/nas/browse/route.ts            |  32 +++
+ src/app/api/nas/m3u/route.ts               |  28 +++
+ src/app/api/settings/route.ts              |  13 +
+ src/components/dashboard/browse-dialog.tsx | 148 ++++++++++++
+ src/components/dashboard/dashboard.tsx     |   5 +
+ src/components/dashboard/library-card.tsx  |  35 +++
+ src/components/settings/settings-view.tsx  |  78 +++++-
+ src/lib/client/hooks.ts                    |   2 +
+ src/lib/config.ts                          |   8 +
+ src/lib/db/settings.ts                     |  24 ++
+ src/lib/dlna/contentdirectory.ts           | 268 +++++++++++++++++++++
+ src/lib/dlna/description.ts                |  64 +++++
+ src/lib/dlna/m3u.ts                        |  19 ++
+ src/lib/dlna/token.ts                      |  48 ++++
+ src/lib/dlna/transport.ts                  | 144 +++++++++++
+ src/lib/wiim/client.ts                     |  10 +-
+ src/lib/wiim/commands.ts                   |   7 +
+ src/lib/wiim/constants.ts                  |   6 +
+ 23 files changed, 1092 insertions(+), 5 deletions(-)
+ create mode 100644 src/app/api/devices/[id]/nas/play/route.ts
+ create mode 100644 src/app/api/nas/art/route.ts
+ create mode 100644 src/app/api/nas/browse/route.ts
+ create mode 100644 src/app/api/nas/m3u/route.ts
+ create mode 100644 src/components/dashboard/browse-dialog.tsx
+ create mode 100644 src/components/dashboard/library-card.tsx
+ create mode 100644 src/lib/dlna/contentdirectory.ts
+ create mode 100644 src/lib/dlna/description.ts
+ create mode 100644 src/lib/dlna/m3u.ts
+ create mode 100644 src/lib/dlna/token.ts
+ create mode 100644 src/lib/dlna/transport.ts
+
+diff --git a/.env.example b/.env.example
+index 7379400..8798ad3 100644
+--- a/.env.example
++++ b/.env.example
+@@ -49,3 +49,11 @@ TURNSTILE_SECRET_KEY=
+ # cover art, look one up by artist + album via the iTunes Search API (keyless).
+ # On by default; set to false/0/off to disable all external artwork lookups.
+ # WIIM_ARTWORK_FALLBACK=true
++
++# --- NAS / DLNA library (optional) ------------------------------------------
++# LAN-reachable base URL the WiiM device uses to fetch the generated m3u when
++# you play a NAS album from the dashboard's Library. Leave UNSET if you browse
++# the dashboard over its LAN IP (it's derived from the request Host). Set it to
++# the dashboard's LAN address when you reach the dashboard through a public
++# https domain / reverse proxy, since the device can't reach that origin.
++# MEDIA_CALLBACK_ORIGIN=http://192.168.1.5:39446
+diff --git a/README.md b/README.md
+index 1015fe2..310c073 100644
+--- a/README.md
++++ b/README.md
+@@ -40,6 +40,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
+ - [Public access / reverse proxy](#public-access--reverse-proxy)
+ - [Cloudflare Turnstile](#cloudflare-turnstile)
+ - [Last.fm scrobbling](#lastfm-scrobbling)
++- [NAS music library (DLNA)](#nas-music-library-dlna)
+ - [Security model](#security-model)
+ - [Development](#development)
+ - [Project structure](#project-structure)
+@@ -63,6 +64,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
+ | **Last.fm scrobbling** | Server-side background scrobbler that runs **even with the dashboard closed**; per-device toggle; scrobbles every source (incl. vinyl/optical/USB) |
+ | **Last.fm Love** | ❤ button on the Now Playing card — loves/unloves the track on Last.fm (WiiM has no native favorite command) |
+ | **Last.fm stats** | Top artists & tracks (7 days / month / all-time) + total scrobbles, when Last.fm is connected |
++| **NAS music library** | Browse a DLNA/UPnP media server (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) as an album-art grid and play a whole album on any device |
+ | **Sleep timer** | 🌙 set a 15–120 min timer that pauses the device — runs **server-side**, so it fires even with the dashboard closed |
+ | **Volume** | Slider **plus −/+ buttons** (touch-friendly on iPad) |
+ | **Presets** | Square artwork tiles in a 2×6 grid (count auto-detected per model), tap to play; names + art from `getPresetInfo`; horizontal-scroll on phones |
+@@ -177,6 +179,7 @@ All configuration is environment variables (see `.env.example`):
+ | `WIIM_CLIENT_CERT_PATH` / `WIIM_CLIENT_KEY_PATH` | — | Optional mTLS override (a working LinkPlay cert is embedded) |
+ | `WIIM_DEVICE_CONCURRENCY` | `4` | Max concurrent `httpapi` requests per device — lower to `1`–`2` for older/flaky devices that choke on parallel bursts |
+ | `WIIM_ARTWORK_FALLBACK` | `true` | Look up cover art by artist + album (iTunes, keyless) when a track has no embedded art (e.g. local files); set `false` to disable external lookups |
++| `MEDIA_CALLBACK_ORIGIN` | — | LAN URL the device fetches the NAS m3u from (e.g. `http://192.168.1.5:39446`). Only needed when you reach the dashboard via a public https domain — see [NAS music library](#nas-music-library-dlna) |
+ 
+ The dashboard's polling interval, Turnstile keys and per-device source names are managed in the **Settings** and **Devices** pages and stored in SQLite. **Last.fm scrobbling** is configured entirely in-app (Settings → Last.fm Scrobbling) — no new env var is needed.
+ 
+@@ -217,6 +220,20 @@ The scrobbler sends `track.updateNowPlaying` on each track change and scrobbles
+ 
+ Your API secret and session key are stored in the SQLite database server-side and are never sent to the browser.
+ 
++## NAS music library (DLNA)
++
++Browse a NAS/UPnP media server and play whole albums on your devices — the WiiM HTTP API can switch inputs and trigger presets but can't browse content, so the dashboard talks to your media server directly over UPnP.
++
++1. Enable the **DLNA / Media Server** feature on your NAS (Synology *Media Server*, MiniDLNA, Asset UPnP, Plex/Jellyfin DLNA, …).
++2. In **Settings → Media server (DLNA)**, paste the server's **device-description XML URL** (e.g. `http://192.168.1.10:8200/rootDesc.xml`) and click **Test connection**.
++3. A **Library** card appears on the dashboard — open it, pick an album, and it plays on the selected device.
++
++**How playback works:** the dashboard builds an `.m3u` of the album's track URLs, hosts it at a short-lived signed URL, and tells the device to play it (`setPlayerCmd:playlist`). The device then streams each track **directly from the NAS**.
++
++> **Reverse-proxy note.** The device fetches that m3u over the LAN, so it must reach the dashboard at a LAN address. If you browse the dashboard over its LAN IP this works automatically. If you reach it through a **public https domain**, the device can't resolve/reach that origin — set `MEDIA_CALLBACK_ORIGIN` to the dashboard's LAN URL (e.g. `http://192.168.1.5:39446`).
++
++All media-server requests (browse, art, playlist) are SSRF-guarded to the configured LAN host, exactly like device traffic. The m3u URL is the one route the device fetches without a session; it's protected by a signed, ~5-minute HMAC token that only ever yields your own album's LAN track URLs.
++
+ ## Security model
+ 
+ - **Device isolation** — only the server reaches the device; requests are SSRF-guarded (DNS-resolved + IP-checked + connection-pinned to LAN ranges); destructive WiiM commands are never proxied.
+diff --git a/docs/WIIM-API.md b/docs/WIIM-API.md
+index e644158..2a98f24 100644
+--- a/docs/WIIM-API.md
++++ b/docs/WIIM-API.md
+@@ -42,9 +42,25 @@ Returns identity + capabilities. Fields this app reads:
+ | Volume (0–100) | `setPlayerCmd:vol:<n>` |
+ | Mute | `setPlayerCmd:mute:<0\|1>` |
+ | Loop/shuffle | `setPlayerCmd:loopmode:<n>` (see below) |
++| Play m3u/playlist URL | `setPlayerCmd:playlist:<url>:<index>` _(community-verified)_ |
+ 
+ `getPlayerStatusEx` notes: `status` = `play|pause|stop|load`; `Title`/`Artist`/`Album` are **hex-encoded UTF-8** (and may contain HTML entities such as `&amp;`, which the app decodes); `curpos`/`totlen` are ms; `mode` = numeric source; `vol`, `mute`, `eq`, `loop`.
+ 
++### Play a URL playlist (`setPlayerCmd:playlist`) _(community-verified)_
++
++`setPlayerCmd:playlist:<url>:<index>` points the device at an `.m3u`/`.m3u8`
++playlist URL; the device fetches it and streams each track in turn, starting at
++zero-based `<index>`. Not in the official PDF; verified against `python-linkplay`
++and field reports.
++
++This project uses it to play a NAS/DLNA album: the dashboard hosts a generated
++m3u of the album's track URLs (`GET /api/nas/m3u?token=…`) and sends this command
++so the device streams each track directly from the NAS. The command string is
++URL-encoded by `encodeCommand` (`?`/`&`/`#`/space), so the embedded m3u URL —
++including its `?token=` — survives; the device splits the URL from `<index>` on
++the final `:`. The m3u host must be a **LAN-reachable** origin the device can
++reach (see `MEDIA_CALLBACK_ORIGIN`), not the public reverse-proxy domain.
++
+ ### `getMetaInfo` → `metaData`
+ 
+ Fields read: `album`, `title`, `subtitle`, `artist`, `albumArtURI`, `sampleRate`, `bitDepth`, `bitRate`, `trackId`. All values are strings.
+diff --git a/src/app/api/devices/[id]/nas/play/route.ts b/src/app/api/devices/[id]/nas/play/route.ts
+new file mode 100644
+index 0000000..d8de001
+--- /dev/null
++++ b/src/app/api/devices/[id]/nas/play/route.ts
+@@ -0,0 +1,47 @@
++import { NextResponse } from "next/server";
++import { z } from "zod";
++import { guard, apiError } from "@/lib/api";
++import { parseBody } from "@/lib/validate";
++import { resolveDevice, runDevice } from "@/lib/device-route";
++import { playUrlList } from "@/lib/wiim/commands";
++import { signM3uToken } from "@/lib/dlna/token";
++import { config } from "@/lib/config";
++
++export const dynamic = "force-dynamic";
++
++type Params = { params: Promise<{ id: string }> };
++
++const Schema = z.object({ object: z.string().trim().min(1).max(1024) });
++
++/**
++ * The LAN-reachable base URL the device should fetch the m3u from. Prefer the
++ * explicit MEDIA_CALLBACK_ORIGIN; otherwise derive it from the inbound request
++ * (correct when the user is browsing over the LAN IP). This is the most common
++ * point of failure for reverse-proxy setups — hence the override.
++ */
++function callbackOrigin(req: Request): string | null {
++  if (config.mediaCallbackOrigin) return config.mediaCallbackOrigin;
++  const host = req.headers.get("host");
++  if (!host) return null;
++  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
++  return `${proto}://${host}`;
++}
++
++/** Play a NAS album: host a signed m3u of its tracks, point the device at it. */
++export async function POST(req: Request, { params }: Params) {
++  const g = await guard(req, { mutation: true });
++  if (g instanceof NextResponse) return g;
++  const r = resolveDevice((await params).id);
++  if ("res" in r) return r.res;
++
++  const parsed = await parseBody(req, Schema);
++  if (!parsed.ok) return parsed.res;
++
++  const origin = callbackOrigin(req);
++  if (!origin) return apiError(400, "Cannot determine callback origin", "NO_CALLBACK_ORIGIN");
++
++  const token = signM3uToken(parsed.data.object);
++  const m3uUrl = `${origin}/api/nas/m3u?token=${token}`;
++
++  return runDevice(() => playUrlList(r.device.host, m3uUrl, 0));
++}
+diff --git a/src/app/api/nas/art/route.ts b/src/app/api/nas/art/route.ts
+new file mode 100644
+index 0000000..768b093
+--- /dev/null
++++ b/src/app/api/nas/art/route.ts
+@@ -0,0 +1,70 @@
++import { NextResponse } from "next/server";
++import { guard } from "@/lib/api";
++import { dlnaFetch } from "@/lib/dlna/transport";
++
++export const dynamic = "force-dynamic";
++
++const TRANSPARENT = Buffer.from(
++  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
++  "base64",
++);
++function fallback(): Response {
++  return new Response(TRANSPARENT, {
++    headers: { "content-type": "image/png", "cache-control": "private, max-age=60" },
++  });
++}
++
++function serveImage(body: Buffer, contentType: string): Response {
++  return new Response(new Uint8Array(body), {
++    headers: { "content-type": contentType, "cache-control": "private, max-age=3600" },
++  });
++}
++
++/** Detect an image MIME type from leading magic bytes (some DLNA servers mislabel art). */
++function sniffImageType(buf: Buffer): string | null {
++  if (buf.length < 12) return null;
++  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
++  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
++  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
++  if (
++    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
++    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
++  ) {
++    return "image/webp";
++  }
++  if (buf[0] === 0x42 && buf[1] === 0x4d) return "image/bmp";
++  return null;
++}
++
++// Server-side cache so art is instant on every load and the NAS is hit at most
++// once per image per hour. Keyed by the (validated) source URL.
++const artCache = new Map<string, { at: number; body: Buffer; contentType: string }>();
++const ART_TTL_MS = 60 * 60 * 1000;
++
++/** Proxy DLNA album art. The URL must resolve to the configured media server
++ *  (enforced by dlnaFetch), so this can't be turned into an open proxy. */
++export async function GET(req: Request) {
++  const g = await guard(req);
++  if (g instanceof NextResponse) return g;
++
++  const url = new URL(req.url).searchParams.get("url");
++  if (!url) return fallback();
++
++  const hit = artCache.get(url);
++  if (hit && Date.now() - hit.at < ART_TTL_MS) return serveImage(hit.body, hit.contentType);
++
++  try {
++    const res = await dlnaFetch(url, { method: "GET", timeoutMs: 7000 });
++    if (res.status >= 400 || res.body.length === 0) return fallback();
++    let contentType = (res.headers["content-type"] as string) || "";
++    if (!contentType.startsWith("image/")) {
++      contentType = sniffImageType(res.body) ?? "";
++      if (!contentType) return fallback();
++    }
++    if (artCache.size > 300) artCache.clear();
++    artCache.set(url, { at: Date.now(), body: res.body, contentType });
++    return serveImage(res.body, contentType);
++  } catch {
++    return fallback();
++  }
++}
+diff --git a/src/app/api/nas/browse/route.ts b/src/app/api/nas/browse/route.ts
+new file mode 100644
+index 0000000..18cc9d5
+--- /dev/null
++++ b/src/app/api/nas/browse/route.ts
+@@ -0,0 +1,32 @@
++import { NextResponse } from "next/server";
++import { guard, apiError, json } from "@/lib/api";
++import { searchAlbums } from "@/lib/dlna/contentdirectory";
++import { DlnaError, dlnaErrorStatus } from "@/lib/dlna/transport";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * List every musicAlbum on the configured DLNA media server. Album art URIs are
++ * rewritten to the /api/nas/art proxy so the browser never talks to the NAS
++ * directly. Doubles as the Settings "Test connection" probe.
++ */
++export async function GET(req: Request) {
++  const g = await guard(req);
++  if (g instanceof NextResponse) return g;
++
++  try {
++    const albums = await searchAlbums();
++    return json({
++      albums: albums.map((a) => ({
++        id: a.id,
++        title: a.title,
++        artist: a.artist,
++        art: a.albumArtUri ? `/api/nas/art?url=${encodeURIComponent(a.albumArtUri)}` : null,
++      })),
++    });
++  } catch (e) {
++    if (e instanceof DlnaError) return apiError(dlnaErrorStatus(e.code), e.message, e.code);
++    const msg = e instanceof Error ? e.message : "Browse failed";
++    return apiError(502, msg, "DLNA");
++  }
++}
+diff --git a/src/app/api/nas/m3u/route.ts b/src/app/api/nas/m3u/route.ts
+new file mode 100644
+index 0000000..49f74c3
+--- /dev/null
++++ b/src/app/api/nas/m3u/route.ts
+@@ -0,0 +1,28 @@
++import { verifyM3uToken } from "@/lib/dlna/token";
++import { albumTracks } from "@/lib/dlna/contentdirectory";
++import { buildM3u } from "@/lib/dlna/m3u";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * Serve the m3u playlist the WiiM device fetches. DELIBERATELY UNAUTHENTICATED:
++ * the device has no session/CSRF. Access is gated entirely by a short-TTL HMAC
++ * token (signed in the play route) whose payload carries the album object id —
++ * so this only ever emits the user's own LAN track URLs, and only for ~5 min.
++ * Reachable because middleware never gates /api (src/middleware.ts).
++ */
++export async function GET(req: Request) {
++  const token = new URL(req.url).searchParams.get("token") ?? "";
++  const verified = verifyM3uToken(token);
++  if (!verified) {
++    return new Response("Forbidden", { status: 403 });
++  }
++  try {
++    const tracks = await albumTracks(verified.object);
++    return new Response(buildM3u(tracks), {
++      headers: { "content-type": "audio/x-mpegurl", "cache-control": "no-store" },
++    });
++  } catch {
++    return new Response("Playlist unavailable", { status: 502 });
++  }
++}
+diff --git a/src/app/api/settings/route.ts b/src/app/api/settings/route.ts
+index 56c6d9f..fe1c100 100644
+--- a/src/app/api/settings/route.ts
++++ b/src/app/api/settings/route.ts
+@@ -6,6 +6,8 @@ import {
+   getSetting,
+   setSetting,
+   getLastfm,
++  getDlna,
++  setDlna,
+   SettingKeys,
+   DEFAULT_CARDS,
+   type TurnstileSettings,
+@@ -41,9 +43,15 @@ const PatchSchema = z.object({
+       sub: z.boolean(),
+       temperature: z.boolean(),
+       device: z.boolean(),
++      nasMedia: z.boolean(),
+     })
+     .partial()
+     .optional(),
++  dlna: z
++    .object({
++      descUrl: z.string().trim().max(2048),
++    })
++    .optional(),
+ });
+ 
+ /** Return settings with the Turnstile secret redacted. */
+@@ -70,6 +78,7 @@ export async function GET(req: Request) {
+       username: lf.username,
+       scrobbleDevices: lf.scrobbleDevices,
+     },
++    dlna: { descUrl: getDlna().descUrl },
+   });
+ }
+ 
+@@ -101,5 +110,9 @@ export async function PATCH(req: Request) {
+     setSetting(SettingKeys.cards, { ...current, ...parsed.data.cards });
+   }
+ 
++  if (parsed.data.dlna) {
++    setDlna({ descUrl: parsed.data.dlna.descUrl });
++  }
++
+   return json({ ok: true });
+ }
+diff --git a/src/components/dashboard/browse-dialog.tsx b/src/components/dashboard/browse-dialog.tsx
+new file mode 100644
+index 0000000..d437054
+--- /dev/null
++++ b/src/components/dashboard/browse-dialog.tsx
+@@ -0,0 +1,148 @@
++"use client";
++
++import { useState } from "react";
++import useSWR from "swr";
++import * as Dialog from "@radix-ui/react-dialog";
++import { AnimatePresence, motion } from "framer-motion";
++import { Disc3, X } from "lucide-react";
++import { Spinner } from "@/components/ui/spinner";
++import { useToast } from "@/components/toast";
++import { apiGet, apiSend, ApiError } from "@/lib/client/api";
++
++type Album = { id: string; title: string; artist: string | null; art: string | null };
++
++export function BrowseDialog({
++  deviceId,
++  open,
++  onOpenChange,
++  onPlayed,
++}: {
++  deviceId: string;
++  open: boolean;
++  onOpenChange: (open: boolean) => void;
++  onPlayed: () => void;
++}) {
++  const toast = useToast();
++  const [busy, setBusy] = useState<string | null>(null);
++
++  // Only fetch while the dialog is open; albums rarely change so don't refocus-revalidate.
++  const { data, error, isLoading } = useSWR<{ albums: Album[] }>(
++    open ? "/api/nas/browse" : null,
++    (url: string) => apiGet<{ albums: Album[] }>(url),
++    { revalidateOnFocus: false },
++  );
++  const albums = data?.albums ?? [];
++
++  async function play(album: Album) {
++    setBusy(album.id);
++    try {
++      await apiSend(`/api/devices/${deviceId}/nas/play`, "POST", { object: album.id });
++      toast(`Playing ${album.title}`, "success");
++      onPlayed();
++      onOpenChange(false);
++    } catch (e) {
++      toast((e as ApiError).message || "Could not play album", "error");
++    } finally {
++      setBusy(null);
++    }
++  }
++
++  return (
++    <Dialog.Root open={open} onOpenChange={onOpenChange}>
++      <AnimatePresence>
++        {open && (
++          <Dialog.Portal forceMount>
++            <Dialog.Overlay asChild>
++              <motion.div
++                initial={{ opacity: 0 }}
++                animate={{ opacity: 1 }}
++                exit={{ opacity: 0 }}
++                className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm"
++              />
++            </Dialog.Overlay>
++            <Dialog.Content asChild>
++              <motion.div
++                initial={{ opacity: 0, y: 16, scale: 0.97 }}
++                animate={{ opacity: 1, y: 0, scale: 1 }}
++                exit={{ opacity: 0, y: 12, scale: 0.97 }}
++                transition={{ type: "spring", stiffness: 380, damping: 30 }}
++                className="glass fixed left-1/2 top-1/2 z-[95] flex max-h-[85vh] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-3xl p-6"
++              >
++                <div className="flex items-start justify-between gap-3">
++                  <div>
++                    <Dialog.Title className="text-lg font-semibold text-foreground">Library</Dialog.Title>
++                    <Dialog.Description className="mt-1 text-sm text-muted-foreground">
++                      Tap an album to play it on this device.
++                    </Dialog.Description>
++                  </div>
++                  <Dialog.Close
++                    className="focus-ring rounded-xl p-2 text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
++                    aria-label="Close"
++                  >
++                    <X className="size-5" />
++                  </Dialog.Close>
++                </div>
++
++                <div className="mt-4 min-h-[12rem] overflow-y-auto [-webkit-overflow-scrolling:touch]">
++                  {isLoading ? (
++                    <div className="flex min-h-[12rem] items-center justify-center">
++                      <Spinner className="size-7 text-primary" />
++                    </div>
++                  ) : error ? (
++                    <p className="py-12 text-center text-sm text-destructive">
++                      {(error as ApiError).message || "Could not reach the media server."}
++                    </p>
++                  ) : albums.length === 0 ? (
++                    <p className="py-12 text-center text-sm text-muted-foreground">
++                      No albums found on the media server.
++                    </p>
++                  ) : (
++                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
++                      {albums.map((a) => (
++                        <button
++                          key={a.id}
++                          onClick={() => void play(a)}
++                          disabled={busy !== null}
++                          title={a.artist ? `${a.title} — ${a.artist}` : a.title}
++                          className="focus-ring group flex flex-col gap-2 rounded-2xl p-2 text-left transition hover:bg-white/5 disabled:opacity-60"
++                        >
++                          <div className="relative aspect-square overflow-hidden rounded-xl border border-border bg-white/[0.03]">
++                            {a.art ? (
++                              // eslint-disable-next-line @next/next/no-img-element
++                              <img
++                                src={a.art}
++                                alt=""
++                                draggable={false}
++                                loading="lazy"
++                                className="absolute inset-0 size-full object-cover"
++                              />
++                            ) : (
++                              <div className="absolute inset-0 grid place-items-center text-muted-foreground/40">
++                                <Disc3 className="size-10" />
++                              </div>
++                            )}
++                            {busy === a.id && (
++                              <span className="absolute inset-0 grid place-items-center bg-black/45">
++                                <Spinner className="size-6 text-white" />
++                              </span>
++                            )}
++                          </div>
++                          <div className="min-w-0">
++                            <p className="truncate text-sm font-medium text-foreground">{a.title}</p>
++                            {a.artist && (
++                              <p className="truncate text-xs text-muted-foreground">{a.artist}</p>
++                            )}
++                          </div>
++                        </button>
++                      ))}
++                    </div>
++                  )}
++                </div>
++              </motion.div>
++            </Dialog.Content>
++          </Dialog.Portal>
++        )}
++      </AnimatePresence>
++    </Dialog.Root>
++  );
++}
+diff --git a/src/components/dashboard/dashboard.tsx b/src/components/dashboard/dashboard.tsx
+index 2900d3d..b51a3c7 100644
+--- a/src/components/dashboard/dashboard.tsx
++++ b/src/components/dashboard/dashboard.tsx
+@@ -18,6 +18,7 @@ import { EqCard } from "./eq-card";
+ import { SubCard } from "./sub-card";
+ import { TempCard } from "./temp-card";
+ import { PresetCard } from "./preset-card";
++import { LibraryCard } from "./library-card";
+ import { DeviceInfoCard } from "./device-info-card";
+ import { LastfmStatsCard } from "./lastfm-stats-card";
+ import { Card } from "@/components/ui/card";
+@@ -141,6 +142,10 @@ export function Dashboard({ initialDevices }: { initialDevices: DeviceListItem[]
+               <PresetCard deviceId={did} presets={snap.presets} onChanged={refresh} />
+             )}
+ 
++            {vis("nasMedia") && settings?.dlna?.descUrl && (
++              <LibraryCard deviceId={did} onChanged={refresh} />
++            )}
++
+             {/* Full per-source Graphic + Parametric EQ (self-hides if unsupported) */}
+             {vis("eq") && <EqCard deviceId={did} initialSource={eqSource} />}
+ 
+diff --git a/src/components/dashboard/library-card.tsx b/src/components/dashboard/library-card.tsx
+new file mode 100644
+index 0000000..3b0ca75
+--- /dev/null
++++ b/src/components/dashboard/library-card.tsx
+@@ -0,0 +1,35 @@
++"use client";
++
++import { useState } from "react";
++import { Library } from "lucide-react";
++import { Card } from "@/components/ui/card";
++import { Button } from "@/components/ui/button";
++import { BrowseDialog } from "./browse-dialog";
++
++/** Entry point for browsing the NAS music library and playing an album. */
++export function LibraryCard({
++  deviceId,
++  onChanged,
++}: {
++  deviceId: string;
++  onChanged: () => void;
++}) {
++  const [open, setOpen] = useState(false);
++
++  return (
++    <Card className="flex items-center justify-between gap-3 p-5">
++      <div className="flex items-center gap-2.5">
++        <span className="text-muted-foreground">
++          <Library className="size-4" />
++        </span>
++        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
++          Library
++        </h3>
++      </div>
++      <Button variant="secondary" onClick={() => setOpen(true)}>
++        <Library className="size-5" /> Browse albums
++      </Button>
++      <BrowseDialog deviceId={deviceId} open={open} onOpenChange={setOpen} onPlayed={onChanged} />
++    </Card>
++  );
++}
+diff --git a/src/components/settings/settings-view.tsx b/src/components/settings/settings-view.tsx
+index 6674bb9..23d36c3 100644
+--- a/src/components/settings/settings-view.tsx
++++ b/src/components/settings/settings-view.tsx
+@@ -13,6 +13,8 @@ import {
+   Radio,
+   Heart,
+   Link as LinkIcon,
++  Server,
++  Plug,
+ } from "lucide-react";
+ import { Card, CardHeader } from "@/components/ui/card";
+ import { Button } from "@/components/ui/button";
+@@ -20,13 +22,14 @@ import { Input, Field } from "@/components/ui/input";
+ import { Switch } from "@/components/ui/switch";
+ import { Spinner } from "@/components/ui/spinner";
+ import { useToast } from "@/components/toast";
+-import { apiSend, ApiError } from "@/lib/client/api";
++import { apiGet, apiSend, ApiError } from "@/lib/client/api";
+ import { useSettings, useDevices, type CardVisibility } from "@/lib/client/hooks";
+ 
+ export function SettingsView({ totpEnabled }: { totpEnabled: boolean }) {
+   return (
+     <div className="space-y-5">
+       <DisplayCards />
++      <MediaServerSettings />
+       <Scrobbling />
+       <ChangePassword />
+       <TwoFactor enabled={totpEnabled} />
+@@ -228,6 +231,7 @@ function DisplayCards() {
+     { key: "sub", label: "Sub-out" },
+     { key: "temperature", label: "Temperature" },
+     { key: "device", label: "Device info" },
++    { key: "nasMedia", label: "Library" },
+   ];
+ 
+   async function toggle(key: keyof CardVisibility, value: boolean) {
+@@ -263,6 +267,78 @@ function DisplayCards() {
+   );
+ }
+ 
++function MediaServerSettings() {
++  const toast = useToast();
++  const { settings, mutate } = useSettings();
++  const [url, setUrl] = useState<string | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [testing, setTesting] = useState(false);
++
++  const val = url ?? settings?.dlna?.descUrl ?? "";
++
++  async function save(): Promise<boolean> {
++    setBusy(true);
++    try {
++      await apiSend("/api/settings", "PATCH", { dlna: { descUrl: val.trim() } });
++      await mutate();
++      setUrl(null);
++      return true;
++    } catch (e) {
++      toast((e as ApiError).message || "Could not save", "error");
++      return false;
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  async function test() {
++    setTesting(true);
++    try {
++      // Persist first so the probe hits the URL just entered.
++      await apiSend("/api/settings", "PATCH", { dlna: { descUrl: val.trim() } });
++      await mutate();
++      setUrl(null);
++      const r = await apiGet<{ albums: unknown[] }>("/api/nas/browse");
++      toast(`Connected — found ${r.albums.length} album${r.albums.length === 1 ? "" : "s"}`, "success");
++    } catch (e) {
++      toast((e as ApiError).message || "Could not reach the media server", "error");
++    } finally {
++      setTesting(false);
++    }
++  }
++
++  return (
++    <Card className="p-5">
++      <CardHeader icon={<Server className="size-4" />} title="Media server (DLNA)" className="px-0 pt-0" />
++      <div className="mt-4 space-y-4">
++        <p className="text-sm text-muted-foreground">
++          Browse a NAS music library (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) and play albums
++          on your devices. Paste your media server&apos;s device-description XML URL — find it in the
++          server&apos;s DLNA/UPnP settings.
++        </p>
++        <Field label="Description URL" hint="e.g. http://192.168.1.10:8200/rootDesc.xml">
++          <Input
++            value={val}
++            onChange={(e) => setUrl(e.target.value)}
++            placeholder="http://192.168.1.10:8200/rootDesc.xml"
++            inputMode="url"
++            autoComplete="off"
++            spellCheck={false}
++          />
++        </Field>
++        <div className="flex flex-wrap gap-2">
++          <Button onClick={() => void save()} disabled={busy || testing}>
++            {busy ? <Spinner /> : <Save className="size-5" />} Save
++          </Button>
++          <Button variant="secondary" onClick={() => void test()} disabled={busy || testing || !val.trim()}>
++            {testing ? <Spinner /> : <Plug className="size-5" />} Test connection
++          </Button>
++        </div>
++      </div>
++    </Card>
++  );
++}
++
+ function ChangePassword() {
+   const toast = useToast();
+   const [cur, setCur] = useState("");
+diff --git a/src/lib/client/hooks.ts b/src/lib/client/hooks.ts
+index 525ab9b..aca0128 100644
+--- a/src/lib/client/hooks.ts
++++ b/src/lib/client/hooks.ts
+@@ -33,6 +33,7 @@ export type CardVisibility = {
+   sub: boolean;
+   temperature: boolean;
+   device: boolean;
++  nasMedia: boolean;
+ };
+ 
+ export type LastfmStatus = {
+@@ -48,6 +49,7 @@ type SettingsResponse = {
+   app: { pollIntervalMs: number };
+   cards: CardVisibility;
+   lastfm: LastfmStatus;
++  dlna: { descUrl: string };
+ };
+ 
+ export function useSettings() {
+diff --git a/src/lib/config.ts b/src/lib/config.ts
+index 8d08bba..27fe9aa 100644
+--- a/src/lib/config.ts
++++ b/src/lib/config.ts
+@@ -36,6 +36,14 @@ export const config = {
+   wiimClientCertPath: process.env.WIIM_CLIENT_CERT_PATH || "",
+   wiimClientKeyPath: process.env.WIIM_CLIENT_KEY_PATH || "",
+ 
++  /**
++   * LAN-reachable base URL the WiiM device uses to fetch the DLNA m3u playlist
++   * (e.g. http://192.168.1.5:39446). Distinct from APP_ORIGIN, which is the
++   * public reverse-proxy origin a LAN device usually can't reach over TLS/DNS.
++   * When unset, the play route derives it from the inbound request Host header.
++   */
++  mediaCallbackOrigin: process.env.MEDIA_CALLBACK_ORIGIN?.replace(/\/$/, "") || "",
++
+   /**
+    * AUTH_SECRET — HMAC pepper for session-token hashing (see db/sessions.ts).
+    * A DB leak alone can't forge sessions without it. Changing it logs everyone
+diff --git a/src/lib/db/settings.ts b/src/lib/db/settings.ts
+index 341e35a..e5c77d5 100644
+--- a/src/lib/db/settings.ts
++++ b/src/lib/db/settings.ts
+@@ -48,6 +48,7 @@ export interface CardVisibility {
+   sub: boolean;
+   temperature: boolean;
+   device: boolean;
++  nasMedia: boolean;
+ }
+ 
+ export const DEFAULT_CARDS: CardVisibility = {
+@@ -59,6 +60,7 @@ export const DEFAULT_CARDS: CardVisibility = {
+   sub: true,
+   temperature: true,
+   device: true,
++  nasMedia: true,
+ };
+ 
+ export const SettingKeys = {
+@@ -67,6 +69,7 @@ export const SettingKeys = {
+   sourceLabels: "sourceLabels",
+   cards: "cards",
+   lastfm: "lastfm",
++  dlna: "dlna",
+ } as const;
+ 
+ /**
+@@ -103,6 +106,27 @@ export function setLastfm(patch: Partial<LastfmSettings>): LastfmSettings {
+   return next;
+ }
+ 
++/**
++ * UPnP/DLNA media server. `descUrl` is the device-description XML URL of the
++ * NAS media server (e.g. http://192.168.1.10:8200/rootDesc.xml), entered in
++ * Settings. Empty until configured; gates the dashboard's Library entry point.
++ */
++export interface DlnaSettings {
++  descUrl: string;
++}
++
++export const DEFAULT_DLNA: DlnaSettings = { descUrl: "" };
++
++export function getDlna(): DlnaSettings {
++  return { ...DEFAULT_DLNA, ...getSetting<Partial<DlnaSettings>>(SettingKeys.dlna, {}) };
++}
++
++export function setDlna(patch: Partial<DlnaSettings>): DlnaSettings {
++  const next = { ...getDlna(), ...patch };
++  setSetting(SettingKeys.dlna, next);
++  return next;
++}
++
+ /**
+  * Per-device custom source names. The WiiM API doesn't expose the input
+  * aliases set in the WiiM app, so the dashboard stores its own overrides:
+diff --git a/src/lib/dlna/contentdirectory.ts b/src/lib/dlna/contentdirectory.ts
+new file mode 100644
+index 0000000..8f58093
+--- /dev/null
++++ b/src/lib/dlna/contentdirectory.ts
+@@ -0,0 +1,268 @@
++import "server-only";
++import { dlnaFetch, DlnaError } from "./transport";
++import { getContentDirectory } from "./description";
++
++/**
++ * UPnP ContentDirectory:1 client. Two operations the dashboard needs:
++ *  - searchAlbums(): every musicAlbum on the server (Search, with a shallow
++ *    Browse fallback when the server doesn't implement Search);
++ *  - albumTracks(): the ordered tracks of one album.
++ *
++ * Servers vary, so the DIDL-Lite parser is deliberately tolerant (regex over
++ * the XML rather than a strict DOM), mirroring the style of wiim/parse.ts.
++ */
++
++const CD_SERVICE = "urn:schemas-upnp-org:service:ContentDirectory:1";
++const ALBUM_CLASS = "object.container.album.musicAlbum";
++/** Bound memory / response size — large libraries are paginated up to this. */
++const MAX_RESULTS = 2000;
++const PAGE_SIZE = 200;
++
++export interface Album {
++  id: string;
++  title: string;
++  artist: string | null;
++  albumArtUri: string | null;
++}
++
++export interface Track {
++  title: string | null;
++  artist: string | null;
++  res: string;
++  duration: number | null;
++}
++
++// --- XML helpers -------------------------------------------------------------
++
++/** Decode the XML/HTML entities DIDL payloads carry (e.g. "&amp;" → "&"). */
++function decodeXml(s: string): string {
++  if (!s.includes("&")) return s;
++  return s
++    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => fromCode(parseInt(h, 16)))
++    .replace(/&#(\d+);/g, (_, d) => fromCode(parseInt(d, 10)))
++    .replace(/&lt;/gi, "<")
++    .replace(/&gt;/gi, ">")
++    .replace(/&quot;/gi, '"')
++    .replace(/&(?:apos|#0*39);/gi, "'")
++    .replace(/&amp;/gi, "&"); // last, so "&amp;lt;" → "&lt;" → "<"
++}
++
++function fromCode(n: number): string {
++  try {
++    return Number.isFinite(n) ? String.fromCodePoint(n) : "";
++  } catch {
++    return "";
++  }
++}
++
++function tag(block: string, name: string): string | null {
++  // name may be namespaced (dc:title, upnp:albumArtURI) — ":" is regex-safe.
++  const re = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`, "i");
++  const m = re.exec(block);
++  return m ? decodeXml(m[1]!.trim()) : null;
++}
++
++function attr(openTag: string, name: string): string | null {
++  const m = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(openTag);
++  return m ? decodeXml(m[1]!) : null;
++}
++
++/** "0:03:45.000" or "0:03:45" → seconds; null when absent/unparseable. */
++function parseDuration(d: string | null): number | null {
++  if (!d) return null;
++  const m = /(\d+):(\d{1,2}):(\d{1,2})(?:\.\d+)?/.exec(d);
++  if (!m) return null;
++  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
++}
++
++function absolute(uri: string | null, base: string): string | null {
++  if (!uri) return null;
++  try {
++    return new URL(uri, base).toString();
++  } catch {
++    return null;
++  }
++}
++
++// --- SOAP --------------------------------------------------------------------
++
++function soapEnvelope(action: string, inner: string): string {
++  return (
++    `<?xml version="1.0" encoding="utf-8"?>` +
++    `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" ` +
++    `s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
++    `<s:Body><u:${action} xmlns:u="${CD_SERVICE}">${inner}</u:${action}></s:Body>` +
++    `</s:Envelope>`
++  );
++}
++
++/** One Browse/Search page. Returns the inner (decoded) DIDL plus TotalMatches. */
++async function soapCall(
++  action: "Browse" | "Search",
++  inner: string,
++): Promise<{ didl: string; total: number; returned: number }> {
++  const cd = await getContentDirectory();
++  const res = await dlnaFetch(cd.controlURL, {
++    method: "POST",
++    headers: {
++      "Content-Type": 'text/xml; charset="utf-8"',
++      SOAPACTION: `"${CD_SERVICE}#${action}"`,
++    },
++    body: soapEnvelope(action, inner),
++    timeoutMs: 8000,
++  });
++  if (res.status >= 400) {
++    // A SOAP fault (often 500) on Search means "unsupported" to our caller.
++    throw new DlnaError(`${action} returned HTTP ${res.status}`, "SOAP_FAULT");
++  }
++  const resultRaw = /<Result>([\s\S]*?)<\/Result>/i.exec(res.text);
++  const didl = resultRaw ? decodeXml(resultRaw[1]!) : "";
++  const total = Number(/<TotalMatches>(\d+)<\/TotalMatches>/i.exec(res.text)?.[1] ?? "0");
++  const returned = Number(/<NumberReturned>(\d+)<\/NumberReturned>/i.exec(res.text)?.[1] ?? "0");
++  return { didl, total, returned };
++}
++
++// --- DIDL parsing ------------------------------------------------------------
++
++function blocks(didl: string, kind: "container" | "item"): string[] {
++  return didl.match(new RegExp(`<${kind}\\b[\\s\\S]*?</${kind}>`, "gi")) ?? [];
++}
++
++function openTagOf(block: string, kind: string): string {
++  const m = new RegExp(`<${kind}\\b[^>]*>`, "i").exec(block);
++  return m ? m[0] : "";
++}
++
++function parseAlbum(block: string, base: string): Album | null {
++  const id = attr(openTagOf(block, "container"), "id");
++  const title = tag(block, "dc:title");
++  if (!id || !title) return null;
++  return {
++    id,
++    title,
++    artist: tag(block, "upnp:artist") ?? tag(block, "dc:creator"),
++    albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base),
++  };
++}
++
++function parseTrack(block: string, base: string): Track | null {
++  const resOpen = /<res\b[^>]*>([\s\S]*?)<\/res>/i.exec(block);
++  const res = absolute(resOpen ? decodeXml(resOpen[1]!.trim()) : null, base);
++  if (!res) return null; // a track with no stream URL is useless to us
++  return {
++    title: tag(block, "dc:title"),
++    artist: tag(block, "upnp:artist") ?? tag(block, "dc:creator"),
++    res,
++    duration: parseDuration(resOpen ? attr(resOpen[0], "duration") : null),
++  };
++}
++
++// --- public API --------------------------------------------------------------
++
++/** All musicAlbum containers on the server, via Search with a Browse fallback. */
++export async function searchAlbums(): Promise<Album[]> {
++  const cd = await getContentDirectory();
++  try {
++    const viaSearch = await searchAlbumsViaSearch(cd.base);
++    if (viaSearch.length > 0) return viaSearch;
++    // Empty result: some servers reply HTTP 200 with no <Result> instead of a
++    // fault when Search is unsupported — try the shallow browse before giving up.
++    return await browseAlbumsShallow(cd.base);
++  } catch (e) {
++    if (e instanceof DlnaError && (e.code === "SOAP_FAULT" || e.code === "TIMEOUT")) {
++      // Server doesn't implement Search (UPnP fault) — fall back to a browse.
++      return browseAlbumsShallow(cd.base);
++    }
++    throw e;
++  }
++}
++
++async function searchAlbumsViaSearch(base: string): Promise<Album[]> {
++  const albums: Album[] = [];
++  for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
++    const inner =
++      `<ContainerID>0</ContainerID>` +
++      `<SearchCriteria>upnp:class derivedfrom "${ALBUM_CLASS}"</SearchCriteria>` +
++      `<Filter>*</Filter>` +
++      `<StartingIndex>${start}</StartingIndex>` +
++      `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
++      `<SortCriteria></SortCriteria>`;
++    const { didl, returned } = await soapCall("Search", inner);
++    const found = blocks(didl, "container")
++      .map((b) => parseAlbum(b, base))
++      .filter((a): a is Album => a !== null);
++    albums.push(...found);
++    if (returned < PAGE_SIZE || found.length === 0) break;
++  }
++  return dedupe(albums);
++}
++
++/** Fallback: browse root children up to 2 levels, collecting musicAlbum containers. */
++async function browseAlbumsShallow(base: string): Promise<Album[]> {
++  const albums: Album[] = [];
++  const seenContainers = new Set<string>();
++
++  async function childrenOf(objectId: string): Promise<string[]> {
++    const inner =
++      `<ObjectID>${objectId}</ObjectID>` +
++      `<BrowseFlag>BrowseDirectChildren</BrowseFlag>` +
++      `<Filter>*</Filter>` +
++      `<StartingIndex>0</StartingIndex>` +
++      `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
++      `<SortCriteria></SortCriteria>`;
++    const { didl } = await soapCall("Browse", inner);
++    const out: string[] = [];
++    for (const b of blocks(didl, "container")) {
++      const cls = tag(b, "upnp:class") ?? "";
++      if (cls.includes(ALBUM_CLASS)) {
++        const album = parseAlbum(b, base);
++        if (album) albums.push(album);
++      } else {
++        const id = attr(openTagOf(b, "container"), "id");
++        if (id) out.push(id);
++      }
++    }
++    return out;
++  }
++
++  const level1 = await childrenOf("0");
++  for (const id of level1) {
++    if (albums.length >= MAX_RESULTS || seenContainers.has(id)) continue;
++    seenContainers.add(id);
++    await childrenOf(id);
++  }
++  return dedupe(albums);
++}
++
++function dedupe(albums: Album[]): Album[] {
++  const byId = new Map<string, Album>();
++  for (const a of albums) if (!byId.has(a.id)) byId.set(a.id, a);
++  return [...byId.values()];
++}
++
++/** Ordered tracks of one album container. */
++export async function albumTracks(albumId: string): Promise<Track[]> {
++  const cd = await getContentDirectory();
++  const tracks: Track[] = [];
++  for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
++    const inner =
++      `<ObjectID>${escapeXml(albumId)}</ObjectID>` +
++      `<BrowseFlag>BrowseDirectChildren</BrowseFlag>` +
++      `<Filter>*</Filter>` +
++      `<StartingIndex>${start}</StartingIndex>` +
++      `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
++      `<SortCriteria></SortCriteria>`;
++    const { didl, returned } = await soapCall("Browse", inner);
++    const found = blocks(didl, "item")
++      .map((b) => parseTrack(b, cd.base))
++      .filter((t): t is Track => t !== null);
++    tracks.push(...found);
++    if (returned < PAGE_SIZE) break;
++  }
++  return tracks;
++}
++
++/** Escape a value placed in element text (object IDs can contain & < >). */
++function escapeXml(s: string): string {
++  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++}
+diff --git a/src/lib/dlna/description.ts b/src/lib/dlna/description.ts
+new file mode 100644
+index 0000000..7f92d40
+--- /dev/null
++++ b/src/lib/dlna/description.ts
+@@ -0,0 +1,64 @@
++import "server-only";
++import { getDlna } from "@/lib/db/settings";
++import { dlnaFetch, DlnaError } from "./transport";
++
++/**
++ * Resolve the ContentDirectory:1 control URL from the media server's device
++ * description XML. The result is cached in-process keyed by the configured
++ * descUrl, so changing the setting transparently invalidates the cache.
++ */
++
++export interface ContentDirectory {
++  controlURL: string;
++  /** Origin to resolve relative DIDL res/art URLs against. */
++  base: string;
++}
++
++let cache: { descUrl: string; cd: ContentDirectory } | null = null;
++
++function firstMatch(re: RegExp, s: string): string | null {
++  const m = re.exec(s);
++  return m ? m[1]!.trim() : null;
++}
++
++/** Pull the ContentDirectory service's <controlURL> out of the description XML. */
++function extractControlUrl(xml: string): string | null {
++  // Each service is a <service>…</service> block; pick the one whose
++  // serviceType names ContentDirectory, then read its controlURL.
++  const services = xml.match(/<service\b[\s\S]*?<\/service>/gi) ?? [];
++  for (const svc of services) {
++    if (/ContentDirectory/i.test(svc)) {
++      const url = firstMatch(/<controlURL>([\s\S]*?)<\/controlURL>/i, svc);
++      if (url) return url;
++    }
++  }
++  return null;
++}
++
++export async function getContentDirectory(): Promise<ContentDirectory> {
++  const descUrl = getDlna().descUrl.trim();
++  if (!descUrl) throw new DlnaError("Media server not configured", "NOT_CONFIGURED");
++  if (cache && cache.descUrl === descUrl) return cache.cd;
++
++  const res = await dlnaFetch(descUrl, { method: "GET", timeoutMs: 7000 });
++  if (res.status >= 400) {
++    throw new DlnaError(`Description fetch returned HTTP ${res.status}`, "HTTP");
++  }
++  const xml = res.text;
++  const controlPath = extractControlUrl(xml);
++  if (!controlPath) {
++    throw new DlnaError("No ContentDirectory service in description", "NO_CONTENT_DIRECTORY");
++  }
++  // controlURL and relative res/art URLs resolve against <URLBase> if present,
++  // otherwise the description URL itself.
++  const urlBase = firstMatch(/<URLBase>([\s\S]*?)<\/URLBase>/i, xml) || descUrl;
++  let controlURL: string;
++  try {
++    controlURL = new URL(controlPath, urlBase).toString();
++  } catch {
++    throw new DlnaError("Bad ContentDirectory control URL", "NO_CONTENT_DIRECTORY");
++  }
++  const cd: ContentDirectory = { controlURL, base: new URL(controlURL).origin };
++  cache = { descUrl, cd };
++  return cd;
++}
+diff --git a/src/lib/dlna/m3u.ts b/src/lib/dlna/m3u.ts
+new file mode 100644
+index 0000000..f48364b
+--- /dev/null
++++ b/src/lib/dlna/m3u.ts
+@@ -0,0 +1,19 @@
++import "server-only";
++import type { Track } from "./contentdirectory";
++
++/**
++ * Build an Extended M3U playlist the WiiM device fetches and plays. Each track
++ * is one #EXTINF line (duration + label) followed by its stream URL on the NAS.
++ */
++export function buildM3u(tracks: Track[]): string {
++  const lines = ["#EXTM3U"];
++  for (const t of tracks) {
++    const secs = t.duration ?? -1;
++    const label =
++      [t.artist, t.title].filter(Boolean).join(" - ") || t.title || "Track";
++    // Strip newlines so a hostile/odd title can't inject extra playlist lines.
++    lines.push(`#EXTINF:${secs},${label.replace(/[\r\n]+/g, " ")}`);
++    lines.push(t.res);
++  }
++  return lines.join("\n") + "\n";
++}
+diff --git a/src/lib/dlna/token.ts b/src/lib/dlna/token.ts
+new file mode 100644
+index 0000000..bd8b6b2
+--- /dev/null
++++ b/src/lib/dlna/token.ts
+@@ -0,0 +1,48 @@
++import "server-only";
++import { createHmac, timingSafeEqual } from "node:crypto";
++import { config } from "@/lib/config";
++
++/**
++ * Short-lived HMAC token authorising the (otherwise unauthenticated) m3u route.
++ * The WiiM device fetches the m3u with no session/CSRF, so the album object id
++ * is carried INSIDE a signed token (not as a query param) and expires quickly.
++ * Keyed by AUTH_SECRET, exactly like session tokens (db/sessions.ts).
++ */
++
++const DEFAULT_TTL_MS = 5 * 60 * 1000;
++
++function sign(payload: string): string {
++  return createHmac("sha256", config.authSecret).update(payload).digest("base64url");
++}
++
++/** Sign `{ object, exp }`; returns "<payload>.<sig>" (URL-safe, no specials). */
++export function signM3uToken(object: string, ttlMs = DEFAULT_TTL_MS): string {
++  const payload = Buffer.from(
++    JSON.stringify({ o: object, e: Date.now() + ttlMs }),
++    "utf8",
++  ).toString("base64url");
++  return `${payload}.${sign(payload)}`;
++}
++
++/** Verify signature + expiry; returns the album object id or null. */
++export function verifyM3uToken(token: string): { object: string } | null {
++  const dot = token.indexOf(".");
++  if (dot <= 0) return null;
++  const payload = token.slice(0, dot);
++  const sig = token.slice(dot + 1);
++  const expected = sign(payload);
++  const a = Buffer.from(sig);
++  const b = Buffer.from(expected);
++  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
++  try {
++    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
++      o?: unknown;
++      e?: unknown;
++    };
++    if (typeof data.o !== "string" || typeof data.e !== "number") return null;
++    if (Date.now() > data.e) return null;
++    return { object: data.o };
++  } catch {
++    return null;
++  }
++}
+diff --git a/src/lib/dlna/transport.ts b/src/lib/dlna/transport.ts
+new file mode 100644
+index 0000000..7b03dd3
+--- /dev/null
++++ b/src/lib/dlna/transport.ts
+@@ -0,0 +1,144 @@
++import "server-only";
++import http from "node:http";
++import https from "node:https";
++import { resolveTarget, pinnedLookup } from "@/lib/wiim/client";
++import { getDlna } from "@/lib/db/settings";
++
++/**
++ * Plain-HTTP UPnP/DLNA transport to the NAS media server on the LAN.
++ *
++ * Unlike the WiiM transport this does NOT present the LinkPlay mTLS client cert
++ * — DLNA servers speak ordinary HTTP SOAP. It reuses the WiiM SSRF guard:
++ *  - the URL host is resolved and the connection is PINNED to that IP (no DNS
++ *    rebind between check and connect);
++ *  - the resolved IP must be private (LAN); and
++ *  - the host must match the configured media server (parsed from descUrl), so
++ *    this can't be pivoted to other internal hosts / cloud metadata.
++ */
++
++export class DlnaError extends Error {
++  code: string;
++  constructor(message: string, code = "DLNA_ERROR") {
++    super(message);
++    this.name = "DlnaError";
++    this.code = code;
++  }
++}
++
++/** Map a DlnaError code to an HTTP status for API routes. */
++export function dlnaErrorStatus(code?: string): number {
++  switch (code) {
++    case "NOT_CONFIGURED":
++    case "FORBIDDEN_HOST":
++      return 400;
++    case "TIMEOUT":
++      return 504;
++    default:
++      return 502;
++  }
++}
++
++/** Hostname of the configured media server (from the description-XML URL). */
++export function getMediaHost(): string {
++  const descUrl = getDlna().descUrl.trim();
++  if (!descUrl) throw new DlnaError("Media server not configured", "NOT_CONFIGURED");
++  try {
++    return new URL(descUrl).hostname;
++  } catch {
++    throw new DlnaError("Invalid media server URL", "NOT_CONFIGURED");
++  }
++}
++
++export interface DlnaResponse {
++  status: number;
++  headers: http.IncomingHttpHeaders;
++  body: Buffer;
++  text: string;
++}
++
++interface DlnaFetchOpts {
++  method?: "GET" | "POST";
++  headers?: Record<string, string>;
++  body?: string;
++  timeoutMs?: number;
++}
++
++/**
++ * Fetch a URL on the configured media server. Enforces the SSRF policy above
++ * before connecting. Used for the description XML, SOAP control calls, and
++ * album art — every byte the DLNA client reads goes through here.
++ */
++export async function dlnaFetch(url: string, opts: DlnaFetchOpts = {}): Promise<DlnaResponse> {
++  let u: URL;
++  try {
++    u = new URL(url);
++  } catch {
++    throw new DlnaError(`Invalid URL: ${url}`, "BAD_URL");
++  }
++  const mediaHost = getMediaHost();
++  if (u.hostname.toLowerCase() !== mediaHost.toLowerCase()) {
++    throw new DlnaError(`Refusing host outside media server: ${u.hostname}`, "FORBIDDEN_HOST");
++  }
++  const target = await resolveTarget(u.hostname);
++  if (!target.isPrivate) {
++    throw new DlnaError(`Refusing non-LAN media target: ${u.hostname} (${target.ip})`, "FORBIDDEN_HOST");
++  }
++
++  const method = opts.method ?? "GET";
++  const timeoutMs = opts.timeoutMs ?? 8000;
++  const isHttp = u.protocol === "http:";
++  const lib = isHttp ? http : https;
++  const bodyBuf = opts.body != null ? Buffer.from(opts.body, "utf8") : undefined;
++
++  return new Promise<DlnaResponse>((resolve, reject) => {
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), timeoutMs);
++
++    const reqOpts: https.RequestOptions = {
++      host: u.hostname,
++      port: u.port || (isHttp ? 80 : 443),
++      path: u.pathname + u.search,
++      method,
++      signal: controller.signal,
++      headers: {
++        "User-Agent": "wiim-dashboard",
++        ...opts.headers,
++        ...(bodyBuf ? { "Content-Length": String(bodyBuf.length) } : {}),
++      },
++    };
++    // A NAS serving art over https is almost always self-signed; verification is
++    // already moot on the trusted LAN and the connection is pinned to the IP.
++    if (!isHttp) (reqOpts as https.RequestOptions).rejectUnauthorized = false;
++    if (!target.isLiteral) reqOpts.lookup = pinnedLookup(target.ip, target.family);
++
++    const req = lib.request(reqOpts, (res: http.IncomingMessage) => {
++      const chunks: Buffer[] = [];
++      let size = 0;
++      res.on("data", (c: Buffer) => {
++        size += c.length;
++        if (size > 10_000_000) {
++          controller.abort();
++          return;
++        }
++        chunks.push(c);
++      });
++      res.on("end", () => {
++        clearTimeout(timer);
++        const body = Buffer.concat(chunks);
++        resolve({
++          status: res.statusCode ?? 0,
++          headers: res.headers,
++          body,
++          text: body.toString("utf8"),
++        });
++      });
++    });
++    req.on("error", (err: NodeJS.ErrnoException) => {
++      clearTimeout(timer);
++      const code = err.name === "AbortError" ? "TIMEOUT" : err.code || "NETWORK";
++      reject(new DlnaError(`Media request to ${u.hostname} failed: ${err.message}`, code));
++    });
++    if (bodyBuf) req.write(bodyBuf);
++    req.end();
++  });
++}
+diff --git a/src/lib/wiim/client.ts b/src/lib/wiim/client.ts
+index 1bd12ed..a43a50e 100644
+--- a/src/lib/wiim/client.ts
++++ b/src/lib/wiim/client.ts
+@@ -94,15 +94,17 @@ export function assertAllowedHost(host: string): void {
+   }
+ }
+ 
+-interface ResolvedTarget {
++export interface ResolvedTarget {
+   ip: string;
+   family: 4 | 6;
+   isLiteral: boolean;
+   isPrivate: boolean;
+ }
+ 
+-/** Resolve a host to a concrete IP we can pin the connection to. */
+-async function resolveTarget(host: string): Promise<ResolvedTarget> {
++/** Resolve a host to a concrete IP we can pin the connection to. Shared with
++ *  the DLNA transport (src/lib/dlna/transport.ts) so it gets the same
++ *  DNS-rebind-safe pinning the WiiM transport uses. */
++export async function resolveTarget(host: string): Promise<ResolvedTarget> {
+   const literalFamily = net.isIP(host);
+   if (literalFamily) {
+     return { ip: host, family: literalFamily as 4 | 6, isLiteral: true, isPrivate: isPrivateIp(host) };
+@@ -131,7 +133,7 @@ type LookupCb = (
+ ) => void;
+ 
+ /** Custom lookup that pins every connection attempt to one validated IP. */
+-function pinnedLookup(ip: string, family: 4 | 6) {
++export function pinnedLookup(ip: string, family: 4 | 6) {
+   return (_hostname: string, options: unknown, callback?: LookupCb): void => {
+     const cb = (typeof options === "function" ? options : callback) as LookupCb;
+     const opts = typeof options === "object" && options ? (options as { all?: boolean }) : null;
+diff --git a/src/lib/wiim/commands.ts b/src/lib/wiim/commands.ts
+index 49a8e56..345bc6f 100644
+--- a/src/lib/wiim/commands.ts
++++ b/src/lib/wiim/commands.ts
+@@ -407,3 +407,10 @@ export async function playPreset(ip: string, index: number): Promise<void> {
+   const text = await send(ip, command);
+   assertAccepted(text, command);
+ }
++
++/** Play an m3u/playlist URL on the device, starting at the given track index. */
++export async function playUrlList(ip: string, url: string, index: number): Promise<void> {
++  const command = Cmd.playPlaylist(url, index);
++  const text = await send(ip, command);
++  assertAccepted(text, command);
++}
+diff --git a/src/lib/wiim/constants.ts b/src/lib/wiim/constants.ts
+index 176bef2..a93869a 100644
+--- a/src/lib/wiim/constants.ts
++++ b/src/lib/wiim/constants.ts
+@@ -53,6 +53,12 @@ export const Cmd = {
+   // Presets (favourites). Count from getStatusEx `preset_key`.
+   getPresets: "getPresetInfo",
+   playPreset: (n: number) => `MCUKeyShortClick:${Math.trunc(n)}`,
++
++  // Play an m3u/playlist URL starting at <index> (community-verified; not in the
++  // official PDF). The device fetches the URL then streams each track. The URL
++  // is URL-encoded by encodeCommand, so an embedded "?token=…" survives.
++  playPlaylist: (url: string, index: number) =>
++    `setPlayerCmd:playlist:${url}:${Math.trunc(index)}`,
+ } as const;
+ 
+ /** Playback status values from getPlayerStatusEx `status`. */
+-- 
+2.43.0
+
