@@ -18,6 +18,10 @@ const Schema = z.object({
   // Optional subset of the container's tracks, by their position in the folder
   // listing. Omitted → play the whole container, in order.
   indices: z.array(z.number().int().min(0).max(100000)).max(2000).optional(),
+  // Alternative selector: one track by its ContentDirectory item id within
+  // `object` (its parent container). Used by whole-library search hits, whose
+  // position in the parent is unknown to the client. Takes precedence.
+  trackId: z.string().trim().min(1).max(1024).optional(),
   // Album/folder name for the tracks' DIDL metadata (shown as the album in Now
   // Playing). Track title/artist/art come from the server-side browse.
   meta: z.object({ album: z.string().max(512) }).optional(),
@@ -43,9 +47,11 @@ export async function POST(req: Request, { params }: Params) {
 
   try {
     const all = await albumTracks(parsed.data.object);
-    const chosen = parsed.data.indices
-      ? parsed.data.indices.map((i) => all[i]).filter((t): t is (typeof all)[number] => t != null)
-      : all;
+    const chosen = parsed.data.trackId
+      ? all.filter((t) => t.id === parsed.data.trackId)
+      : parsed.data.indices
+        ? parsed.data.indices.map((i) => all[i]).filter((t): t is (typeof all)[number] => t != null)
+        : all;
     if (chosen.length === 0) return apiError(404, "No playable tracks", "NO_TRACKS");
 
     const queue: AvTrack[] = chosen.map((t) => ({

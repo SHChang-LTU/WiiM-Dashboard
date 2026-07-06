@@ -56,6 +56,23 @@ export interface FolderListing {
   tracks: FolderTrack[];
 }
 
+/** One track hit from a whole-library Search (playable via parent container + item id). */
+export interface SearchTrack {
+  id: string | null;
+  parentId: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  albumArtUri: string | null;
+  duration: number | null;
+}
+
+/** Whole-library name-search results: matching containers + matching tracks. */
+export interface LibrarySearch {
+  folders: Folder[];
+  tracks: SearchTrack[];
+}
+
 // --- XML helpers -------------------------------------------------------------
 
 /** Decode the XML/HTML entities DIDL payloads carry (e.g. "&amp;" → "&"). */
@@ -207,6 +224,28 @@ function parseFolder(block: string, base: string): Folder | null {
   return { id, title, albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base) };
 }
 
+/**
+ * An <item> hit from a whole-library Search. Unlike parseTrack, <res> is not
+ * required — a hit is played via its parent container + item id, so a server
+ * that omits res from Search results still yields usable matches.
+ */
+function parseSearchTrack(block: string, base: string): SearchTrack | null {
+  const open = openTagOf(block, "item");
+  const resOpen = /<res\b[^>]*>/i.exec(block);
+  if (!isAudioItem(block, resOpen ? resOpen[0] : "")) return null;
+  const title = tag(block, "dc:title");
+  if (!title) return null;
+  return {
+    id: attr(open, "id"),
+    parentId: attr(open, "parentID"),
+    title,
+    artist: tag(block, "upnp:artist") ?? tag(block, "dc:creator"),
+    album: tag(block, "upnp:album"),
+    albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base),
+    duration: parseDuration(resOpen ? attr(resOpen[0], "duration") : null),
+  };
+}
+
 // --- public API --------------------------------------------------------------
 
 /** All musicAlbum containers on the server, via Search with a Browse fallback. */
@@ -288,6 +327,69 @@ function dedupe(albums: Album[]): Album[] {
   const byId = new Map<string, Album>();
   for (const a of albums) if (!byId.has(a.id)) byId.set(a.id, a);
   return [...byId.values()];
+}
+
+/** Cap per result kind for a whole-library search — keep responses snappy. */
+const SEARCH_CAP = 500;
+
+/**
+ * Whole-library name search: containers (folders/albums/artists…) and audio
+ * tracks whose title contains `query`. Search-action only — servers without
+ * UPnP Search fault with SOAP_FAULT, which the route reports as unsupported
+ * (no Browse crawl fallback; that would walk the entire tree).
+ */
+export async function searchLibrary(query: string): Promise<LibrarySearch> {
+  const cd = await getContentDirectory();
+  // " and \ are metacharacters inside the UPnP quoted criteria literal — drop
+  // them, then escape for XML like every other value we embed.
+  const q = escapeXml(query.replace(/["\\]/g, " ").trim());
+  if (!q) return { folders: [], tracks: [] };
+  const [folders, tracks] = await Promise.all([
+    runSearch(
+      `upnp:class derivedfrom "object.container" and dc:title contains "${q}"`,
+      "container",
+      (b) => parseFolder(b, cd.base),
+    ),
+    runSearch(
+      `upnp:class derivedfrom "object.item.audioItem" and dc:title contains "${q}"`,
+      "item",
+      (b) => parseSearchTrack(b, cd.base),
+    ),
+  ]);
+  return { folders, tracks };
+}
+
+/** Paged Search for one result kind, deduped by object id, capped at SEARCH_CAP. */
+async function runSearch<T extends { id: string | null }>(
+  criteria: string,
+  kind: "container" | "item",
+  parse: (block: string) => T | null,
+): Promise<T[]> {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (let start = 0; start < SEARCH_CAP; start += PAGE_SIZE) {
+    const inner =
+      `<ContainerID>0</ContainerID>` +
+      `<SearchCriteria>${criteria}</SearchCriteria>` +
+      `<Filter>*</Filter>` +
+      `<StartingIndex>${start}</StartingIndex>` +
+      `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
+      `<SortCriteria></SortCriteria>`;
+    const { didl, returned } = await soapCall("Search", inner);
+    let found = 0;
+    for (const b of blocks(didl, kind)) {
+      const item = parse(b);
+      if (!item) continue;
+      if (item.id) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+      }
+      out.push(item);
+      found++;
+    }
+    if (returned < PAGE_SIZE || found === 0) break;
+  }
+  return out;
 }
 
 /** Ordered tracks of one album container. */
