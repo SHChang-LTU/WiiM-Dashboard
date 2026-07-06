@@ -225,11 +225,15 @@ function parseFolder(block: string, base: string): Folder | null {
 }
 
 /**
- * An <item> hit from a whole-library Search. Unlike parseTrack, <res> is not
- * required — a hit is played via its parent container + item id, so a server
- * that omits res from Search results still yields usable matches.
+ * An audio <item> encountered while crawling. `res` is not required — a hit is
+ * played via its parent container + item id. Falls back to the parent container's
+ * id/title for parentId and album when the DIDL omits them.
  */
-function parseSearchTrack(block: string, base: string): SearchTrack | null {
+function parseCrawlTrack(
+  block: string,
+  base: string,
+  parent: { id: string; title: string },
+): SearchTrack | null {
   const open = openTagOf(block, "item");
   const resOpen = /<res\b[^>]*>/i.exec(block);
   if (!isAudioItem(block, resOpen ? resOpen[0] : "")) return null;
@@ -237,10 +241,10 @@ function parseSearchTrack(block: string, base: string): SearchTrack | null {
   if (!title) return null;
   return {
     id: attr(open, "id"),
-    parentId: attr(open, "parentID"),
+    parentId: attr(open, "parentID") ?? parent.id,
     title,
     artist: tag(block, "upnp:artist") ?? tag(block, "dc:creator"),
-    album: tag(block, "upnp:album"),
+    album: tag(block, "upnp:album") ?? (parent.title || null),
     albumArtUri: absolute(tag(block, "upnp:albumArtURI"), base),
     duration: parseDuration(resOpen ? attr(resOpen[0], "duration") : null),
   };
@@ -329,67 +333,142 @@ function dedupe(albums: Album[]): Album[] {
   return [...byId.values()];
 }
 
-/** Cap per result kind for a whole-library search — keep responses snappy. */
+/** Cap the number of matches returned per kind. */
 const SEARCH_CAP = 500;
 
 /**
- * Whole-library name search: containers (folders/albums/artists…) and audio
- * tracks whose title contains `query`. Search-action only — servers without
- * UPnP Search fault with SOAP_FAULT, which the route reports as unsupported
- * (no Browse crawl fallback; that would walk the entire tree).
+ * Whole-library search index, built by crawling the ContentDirectory with Browse
+ * and cached in-process. We crawl rather than use the UPnP Search action because
+ * some servers (notably Universal Media Server) only index part of the tree for
+ * Search — folder shares are browsable but invisible to Search — so Search
+ * silently misses tracks. Browsing the tree ourselves sees everything the user
+ * can navigate to, and lets us match case-insensitively.
  */
-export async function searchLibrary(query: string): Promise<LibrarySearch> {
+interface LibraryIndex {
+  folders: Folder[];
+  tracks: SearchTrack[];
+}
+
+const INDEX_TTL_MS = 30 * 60 * 1000; // rebuild at most once per 30 min
+const CRAWL_CONCURRENCY = 20; // parallel Browse calls (each is ~20ms on a LAN server)
+const CRAWL_MAX_CONTAINERS = 20_000; // safety bound for pathological trees
+const CRAWL_BUDGET_MS = 45_000; // stop (return a partial index) past this
+
+/**
+ * Containers NOT to descend into. UMS (and similar) expose a "Media Library" node
+ * that re-lists every file across By-Album/By-Artist/By-Date views — a 5-10×
+ * redundant, slow-to-browse duplicate of the real folder shares (and each copy
+ * gets a distinct object id, so it can't even be deduped). The folder shares hold
+ * the same tracks and browse fast, so we skip this subtree. The node itself is
+ * still recorded as a folder so its name is searchable.
+ */
+const SKIP_SUBTREE_TITLES = new Set(["media library"]);
+
+let indexCache: { index: LibraryIndex; expires: number } | null = null;
+let indexInFlight: Promise<LibraryIndex> | null = null;
+
+/** Cached, deduped flat index of every folder + audio track reachable by Browse. */
+async function getLibraryIndex(): Promise<LibraryIndex> {
+  if (indexCache && indexCache.expires > Date.now()) return indexCache.index;
+  if (indexInFlight) return indexInFlight; // coalesce concurrent first-searches
+  indexInFlight = crawlLibrary()
+    .then((index) => {
+      indexCache = { index, expires: Date.now() + INDEX_TTL_MS };
+      return index;
+    })
+    .finally(() => {
+      indexInFlight = null;
+    });
+  return indexInFlight;
+}
+
+/** Breadth-first crawl of the whole tree, deduped by object id, bounded. */
+async function crawlLibrary(): Promise<LibraryIndex> {
   const cd = await getContentDirectory();
-  // " and \ are metacharacters inside the UPnP quoted criteria literal — drop
-  // them, then escape for XML like every other value we embed.
-  const q = escapeXml(query.replace(/["\\]/g, " ").trim());
-  if (!q) return { folders: [], tracks: [] };
-  const [folders, tracks] = await Promise.all([
-    runSearch(
-      `upnp:class derivedfrom "object.container" and dc:title contains "${q}"`,
-      "container",
-      (b) => parseFolder(b, cd.base),
-    ),
-    runSearch(
-      `upnp:class derivedfrom "object.item.audioItem" and dc:title contains "${q}"`,
-      "item",
-      (b) => parseSearchTrack(b, cd.base),
-    ),
-  ]);
+  const folders: Folder[] = [];
+  const tracks: SearchTrack[] = [];
+  const seenContainers = new Set<string>(["0"]);
+  const seenFolders = new Set<string>();
+  const seenTracks = new Set<string>();
+  const startedAt = Date.now();
+
+  // The root browse is intentionally not wrapped: an unreachable server should
+  // surface as an error, not a silently-empty index.
+  let frontier = await crawlContainer({ id: "0", title: "" }, cd.base, folders, tracks, seenFolders, seenTracks);
+
+  while (frontier.length > 0) {
+    if (seenContainers.size >= CRAWL_MAX_CONTAINERS || Date.now() - startedAt > CRAWL_BUDGET_MS) break;
+    const batch = frontier.splice(0, CRAWL_CONCURRENCY);
+    const subs = await Promise.all(
+      batch.map(async (node) => {
+        if (seenContainers.has(node.id)) return [];
+        seenContainers.add(node.id);
+        try {
+          return await crawlContainer(node, cd.base, folders, tracks, seenFolders, seenTracks);
+        } catch {
+          return []; // one unreachable container shouldn't abort the whole crawl
+        }
+      }),
+    );
+    for (const s of subs) frontier.push(...s);
+  }
   return { folders, tracks };
 }
 
-/** Paged Search for one result kind, deduped by object id, capped at SEARCH_CAP. */
-async function runSearch<T extends { id: string | null }>(
-  criteria: string,
-  kind: "container" | "item",
-  parse: (block: string) => T | null,
-): Promise<T[]> {
-  const out: T[] = [];
-  const seen = new Set<string>();
-  for (let start = 0; start < SEARCH_CAP; start += PAGE_SIZE) {
+/** Browse every page of one container; collect its folders + audio tracks, return new sub-containers. */
+async function crawlContainer(
+  node: { id: string; title: string },
+  base: string,
+  folders: Folder[],
+  tracks: SearchTrack[],
+  seenFolders: Set<string>,
+  seenTracks: Set<string>,
+): Promise<{ id: string; title: string }[]> {
+  const subs: { id: string; title: string }[] = [];
+  for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
     const inner =
-      `<ContainerID>0</ContainerID>` +
-      `<SearchCriteria>${criteria}</SearchCriteria>` +
+      `<ObjectID>${escapeXml(node.id)}</ObjectID>` +
+      `<BrowseFlag>BrowseDirectChildren</BrowseFlag>` +
       `<Filter>*</Filter>` +
       `<StartingIndex>${start}</StartingIndex>` +
       `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
       `<SortCriteria></SortCriteria>`;
-    const { didl, returned } = await soapCall("Search", inner);
-    let found = 0;
-    for (const b of blocks(didl, kind)) {
-      const item = parse(b);
-      if (!item) continue;
-      if (item.id) {
-        if (seen.has(item.id)) continue;
-        seen.add(item.id);
-      }
-      out.push(item);
-      found++;
+    const { didl, returned } = await soapCall("Browse", inner);
+    for (const b of blocks(didl, "container")) {
+      const f = parseFolder(b, base);
+      if (!f || seenFolders.has(f.id)) continue;
+      seenFolders.add(f.id);
+      folders.push(f);
+      if (!SKIP_SUBTREE_TITLES.has(f.title.trim().toLowerCase())) subs.push({ id: f.id, title: f.title });
     }
-    if (returned < PAGE_SIZE || found === 0) break;
+    for (const b of blocks(didl, "item")) {
+      const t = parseCrawlTrack(b, base, node);
+      if (!t) continue;
+      // UMS re-lists the same file across Media Library views — dedupe by id.
+      const key = t.id ?? `${node.id}:${t.title}`;
+      if (seenTracks.has(key)) continue;
+      seenTracks.add(key);
+      tracks.push(t);
+    }
+    if (returned < PAGE_SIZE) break;
   }
-  return out;
+  return subs;
+}
+
+/**
+ * Whole-library name search over the cached crawl index: folders/albums by title,
+ * tracks by title or artist, case-insensitive. The first call after the cache
+ * expires pays the crawl cost; subsequent calls are instant.
+ */
+export async function searchLibrary(query: string): Promise<LibrarySearch> {
+  const q = query.trim().toLowerCase();
+  if (!q) return { folders: [], tracks: [] };
+  const index = await getLibraryIndex();
+  const folders = index.folders.filter((f) => f.title.toLowerCase().includes(q)).slice(0, SEARCH_CAP);
+  const tracks = index.tracks
+    .filter((t) => (t.title ?? "").toLowerCase().includes(q) || (t.artist ?? "").toLowerCase().includes(q))
+    .slice(0, SEARCH_CAP);
+  return { folders, tracks };
 }
 
 /** Ordered tracks of one album container. */

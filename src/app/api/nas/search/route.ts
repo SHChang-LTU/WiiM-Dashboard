@@ -11,10 +11,11 @@ function artProxy(uri: string | null): string | null {
 }
 
 /**
- * Whole-library name search via the ContentDirectory Search action: containers
- * (folders/albums/artists…) and audio tracks whose title contains `q`. Track
- * hits carry their parent container id so the play route can select them by
- * item id (see /api/devices/[id]/nas/play `trackId`).
+ * Whole-library name search: containers (folders/albums/artists…) and audio
+ * tracks whose title/artist matches `q`, over a cached crawl of the media server
+ * (see searchLibrary — crawls via Browse because some servers, e.g. UMS, don't
+ * index folder shares for the UPnP Search action). Track hits carry their parent
+ * container id so the play route can select them by item id (`trackId`).
  */
 export async function GET(req: Request) {
   const g = await guard(req);
@@ -38,9 +39,6 @@ export async function GET(req: Request) {
       })),
     });
   } catch (e) {
-    if (e instanceof DlnaError && e.code === "SOAP_FAULT") {
-      return apiError(422, "The media server does not support search", "SEARCH_UNSUPPORTED");
-    }
     if (e instanceof DlnaError) return apiError(dlnaErrorStatus(e.code), e.message, e.code);
     const msg = e instanceof Error ? e.message : "Search failed";
     return apiError(502, msg, "DLNA");

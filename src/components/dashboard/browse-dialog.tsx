@@ -377,8 +377,9 @@ export function BrowseDialog({
                   <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 [-webkit-overflow-scrolling:touch]">
                     {searchActive ? (
                       search.isLoading ? (
-                        <div className="flex min-h-[12rem] items-center justify-center">
+                        <div className="flex min-h-[12rem] flex-col items-center justify-center gap-3">
                           <Spinner className="size-7 text-primary" />
+                          <p className="text-xs text-muted-foreground">Searching your whole library…</p>
                         </div>
                       ) : search.error ? (
                         <p className="py-12 text-center text-sm text-destructive">
