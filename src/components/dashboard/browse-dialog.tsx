@@ -263,8 +263,11 @@ export function BrowseDialog({
                     </Dialog.Close>
                   </div>
 
-                  {/* Breadcrumb trail */}
-                  <nav className="mt-3 flex items-center gap-0.5 overflow-x-auto pb-1 text-sm">
+                  {/* Breadcrumb trail. shrink-0: this is a scroll container (its
+                      automatic min-height is 0), so without it the dialog's flex
+                      column crushes the crumbs against the description when the
+                      list below fills the panel. */}
+                  <nav className="mt-4 flex shrink-0 items-center gap-0.5 overflow-x-auto pb-1 text-sm">
                     {stack.map((c, i) => {
                       const last = i === stack.length - 1;
                       return (
