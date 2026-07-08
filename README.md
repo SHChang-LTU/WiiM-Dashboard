@@ -304,7 +304,7 @@ PRs welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. Run `npm run 
 
 ## Support
 
-Questions, bug reports or feature requests for this fork? [Open an issue](https://github.com/SHChang-LTU/WiiM-Dashboard/issues). If you'd like to support the original project this fork is built on, its author accepts [GitHub Sponsors](https://github.com/sponsors/illianoaoi). ❤️
+Questions, bug reports or feature requests? [Open an issue](https://github.com/SHChang-LTU/WiiM-Dashboard/issues). If Wiim Dashboard is useful to you, you can support its continued development through [GitHub Sponsors](https://github.com/sponsors/SHChang-LTU) — completely optional, and genuinely appreciated. ❤️
 
 ## License & credits
 
