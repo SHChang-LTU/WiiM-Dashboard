@@ -6,7 +6,7 @@
 
 Now-playing & transport · EQ · sub-out · source/output switching · presets with artwork · amp temperature — built for phone, tablet and desktop, packaged as a single Docker container, and hardened to sit safely behind your own reverse proxy.
 
-[![CI](https://github.com/illianoaoi/Wiim-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/illianoaoi/Wiim-Dashboard/actions/workflows/ci.yml)
+[![CI](https://github.com/SHChang-LTU/WiiM-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/SHChang-LTU/WiiM-Dashboard/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/License-MIT-7c5cff.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)
@@ -23,6 +23,9 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 </div>
 
 ---
+
+> [!NOTE]
+> This project was cloned from [illianoaoi/Wiim-Dashboard](https://github.com/illianoaoi/Wiim-Dashboard) and is developed further by **Crimson** ([crimson.chang@gmail.com](mailto:crimson.chang@gmail.com)).
 
 > [!IMPORTANT]
 > The WiiM device HTTP API has **no authentication** and uses a self-signed certificate. This app **never exposes the device** — a server-side proxy is the only thing that talks to it, behind login + CSRF + optional Cloudflare Turnstile, and SSRF-guarded so it can only reach LAN hosts.
@@ -64,7 +67,7 @@ Now-playing & transport · EQ · sub-out · source/output switching · presets w
 | **Last.fm scrobbling** | Server-side background scrobbler that runs **even with the dashboard closed**; per-device toggle; scrobbles every source (incl. vinyl/optical/USB) |
 | **Last.fm Love** | ❤ button on the Now Playing card — loves/unloves the track on Last.fm (WiiM has no native favorite command) |
 | **Last.fm stats** | Top artists & tracks (7 days / month / all-time) + total scrobbles, when Last.fm is connected |
-| **NAS music library** | Browse a DLNA/UPnP media server (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) folder by folder, and play a whole album or hand-picked tracks on any device |
+| **NAS music library** | Browse a DLNA/UPnP media server (Synology, MiniDLNA, Asset UPnP, Plex/Jellyfin) folder by folder, **filter the current folder as you type, or press Enter to search your whole library** (works even on servers without UPnP Search), and play a whole album, hand-picked tracks or a single search hit on any device |
 | **Sleep timer** | 🌙 set a 15–120 min timer that pauses the device — runs **server-side**, so it fires even with the dashboard closed |
 | **Volume** | Slider **plus −/+ buttons** (touch-friendly on iPad) |
 | **Presets** | Square artwork tiles in a 2×6 grid (count auto-detected per model), tap to play; names + art from `getPresetInfo`; horizontal-scroll on phones |
@@ -122,8 +125,8 @@ The Next.js server is the **only** component that talks to the device. The brows
 **Prerequisites:** Docker + Docker Compose, and your WiiM device(s) reachable on the LAN.
 
 ```bash
-git clone https://github.com/illianoaoi/Wiim-Dashboard.git
-cd Wiim-Dashboard
+git clone https://github.com/SHChang-LTU/WiiM-Dashboard.git
+cd WiiM-Dashboard
 
 cp .env.example .env
 # Edit .env — at minimum set AUTH_SECRET:
@@ -148,7 +151,7 @@ docker run -d --name wiim-dashboard -p 39446:3000 \
   ghcr.io/illianoaoi/wiim-dashboard:latest
 ```
 
-Pin a version with `:0.3.0` instead of `:latest`. Behind https, drop `COOKIE_SECURE=false` and set `APP_ORIGIN`.
+Pin a version with `:0.3.6` instead of `:latest`. Behind https, drop `COOKIE_SECURE=false` and set `APP_ORIGIN`.
 
 ## First run
 
@@ -227,6 +230,8 @@ Browse a NAS/UPnP media server and play whole albums on your devices — the Wii
 2. In **Settings → Media server (DLNA)**, paste the server's **device-description XML URL** (e.g. `http://192.168.1.10:8200/rootDesc.xml`) and click **Test connection**.
 3. A **Library** card appears on the dashboard — open it, browse into a folder, then tap a track (or tick several, or **Play all**) to play on the selected device.
 
+**Search:** the search box in the Library filters the current folder as you type; press **Enter** to search your **entire library** instead (folders and tracks, matched by title or artist), and tap any hit to open or play it. The dashboard builds its own search index by crawling the server's folder tree — because many media servers (e.g. Universal Media Server) don't support the UPnP `Search` action on folder shares — so the very first search takes a moment; the index is then cached for ~30 minutes.
+
 **How playback works:** the dashboard drives the WiiM's own UPnP MediaRenderer (AVTransport) — it sets and plays the first track, then keeps the next track queued as the album advances, so playback **starts at the first track**, plays in order, and streams each track **directly from the NAS** with real title/artist/album and cover art. (The WiiM's httpapi playlist command is unusable for this — it ignores the start index and resumes mid-album.)
 
 All media-server requests (browse, art) are SSRF-guarded to the configured LAN host, exactly like device traffic, and album art is proxied through the dashboard so the browser never contacts the NAS directly.
@@ -258,7 +263,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and step-by-step guides (
 src/
 ├── app/                      # Next.js App Router
 │   ├── (pages)               # /, /login, /setup, /settings, /devices
-│   └── api/                  # auth, settings, discover, lastfm/{credentials,connect,session,disconnect,devices,love}, devices/[id]/{control,eq,sub,output,source,preset,art,snapshot,…}
+│   └── api/                  # auth, settings, discover, lyrics, lastfm/{credentials,connect,session,disconnect,devices,love}, nas/{list,search,art,…}, devices/[id]/{control,eq,sub,output,source,preset,art,snapshot,sleep,nas/play,…}
 ├── components/
 │   ├── ui/                   # button, card, slider, stepper-slider, switch, input, icon, service-logo…
 │   ├── auth/                 # login/setup forms, Turnstile widget
@@ -267,8 +272,12 @@ src/
 │   └── settings/             # account, 2FA, Turnstile, polling, Last.fm
 ├── lib/
 │   ├── wiim/                 # device client (TLS/mTLS/SSRF), commands, parsing, capabilities, discovery, now-playing-info
+│   ├── dlna/                 # NAS library: UPnP ContentDirectory browse + crawl search, AVTransport playback, play-queue advancer
 │   ├── lastfm/               # Audioscrobbler 2.0 client (auth, now-playing, scrobble, love)
 │   ├── scrobble/             # server-side background scrobbler (poller)
+│   ├── sleep/                # server-side sleep-timer registry
+│   ├── lyrics/               # LRCLIB synced-lyrics client
+│   ├── artwork/              # iTunes album-art fallback lookup
 │   ├── auth/                 # password, session, csrf, turnstile, totp, rate-limit
 │   ├── db/                   # better-sqlite3 store (users, sessions, devices, settings)
 │   └── client/               # browser fetch helpers + SWR hooks
@@ -295,11 +304,13 @@ PRs welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first. Run `npm run 
 
 ## Support
 
-If Wiim Dashboard is useful to you, you can support its continued development through [GitHub Sponsors](https://github.com/sponsors/illianoaoi) — completely optional, and genuinely appreciated. ❤️
+Questions, bug reports or feature requests for this fork? [Open an issue](https://github.com/SHChang-LTU/WiiM-Dashboard/issues). If you'd like to support the original project this fork is built on, its author accepts [GitHub Sponsors](https://github.com/sponsors/illianoaoi). ❤️
 
 ## License & credits
 
 MIT — see [LICENSE](LICENSE). You're free to use, modify and redistribute.
+
+This repository was cloned from the original [illianoaoi/Wiim-Dashboard](https://github.com/illianoaoi/Wiim-Dashboard) project by illiano, and is developed further by **Crimson** ([crimson.chang@gmail.com](mailto:crimson.chang@gmail.com)).
 
 WiiM/LinkPlay HTTP API behaviour and the shared client certificate are derived from the official *HTTP API for WiiM Products v1.2* and the open-source [`python-linkplay`](https://github.com/Velleman/python-linkplay) / [`pywiim`](https://github.com/mjcumming/pywiim) projects. Sub-out (`getSubLPF`/`setSubLPF`), extended output/source modes and presets are community-verified and not all in the official PDF.
 
@@ -311,6 +322,6 @@ The vinyl-record illustration (`public/vinyl-record.svg`) is public-domain (CC0)
 
 <div align="center">
 
-✨ <strong>Vibe coding by illiano</strong>
+✨ <strong>Developed further by Crimson</strong> · original vibe coding by <a href="https://github.com/illianoaoi/Wiim-Dashboard">illiano</a>
 
 </div>
