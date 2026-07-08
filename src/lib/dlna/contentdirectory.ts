@@ -216,6 +216,62 @@ function parseTrack(block: string, base: string): Track | null {
   };
 }
 
+// --- folder cover-art fallback ------------------------------------------------
+//
+// Untagged files (WAV rips especially) have no embedded art, so servers like UMS
+// advertise a generated per-format icon (a generic "WAV" tile) as the track's
+// albumArtURI — while the folder's actual cover scan is exposed only as a sibling
+// imageItem named "Cover"/"folder"/"front". When that's the case, prefer the
+// folder's cover image over the track's own art.
+
+/**
+ * A thumbnail URL that embeds the audio filename (".../PNG_LRG_01.-Amanda.wav.png")
+ * is a server-generated format icon, not real cover art.
+ */
+const FORMAT_ICON_RE = /\.(wav|flac|mp3|m4a|aac|ogg|opus|aiff?|ape|wv|dsf|dff|wma)\.(?:png|jpe?g)(?:[?#]|$)/i;
+
+/** Titles that mark a folder's cover-image item, best first. */
+const COVER_TITLES = ["cover", "folder", "front", "albumart", "album art"];
+
+function isImageItem(block: string): boolean {
+  const cls = (tag(block, "upnp:class") ?? "").toLowerCase();
+  if (cls) return cls.includes("imageitem");
+  const resOpen = /<res\b[^>]*>/i.exec(block);
+  return (attr(resOpen?.[0] ?? "", "protocolInfo") ?? "").toLowerCase().includes(":image/");
+}
+
+/**
+ * The cover image of a folder, from its <item> children: an imageItem with a
+ * cover-like title, or a lone imageItem (an album folder's only image is almost
+ * always the cover). Prefers the full-size <res> over the server's thumbnail.
+ */
+function folderCoverArt(itemBlocks: string[], base: string): string | null {
+  let best: { rank: number; uri: string } | null = null;
+  let lone: string | null = null;
+  let imageCount = 0;
+  for (const b of itemBlocks) {
+    if (!isImageItem(b)) continue;
+    const resTag = /<res\b[^>]*>([\s\S]*?)<\/res>/i.exec(b);
+    const uri =
+      absolute(resTag ? decodeXml(resTag[1]!.trim()) : null, base) ?? absolute(tag(b, "upnp:albumArtURI"), base);
+    if (!uri) continue;
+    imageCount++;
+    lone = uri;
+    const title = (tag(b, "dc:title") ?? "").trim().toLowerCase();
+    const rank = COVER_TITLES.findIndex((t) => title === t || title.startsWith(t));
+    if (rank >= 0 && (best === null || rank < best.rank)) best = { rank, uri };
+  }
+  if (best) return best.uri;
+  return imageCount === 1 ? lone : null;
+}
+
+/** Keep the track's own art unless it's missing or a generated format icon. */
+function withCoverFallback<T extends { albumArtUri: string | null }>(track: T, cover: string | null): T {
+  if (!cover) return track;
+  if (track.albumArtUri && !FORMAT_ICON_RE.test(track.albumArtUri)) return track;
+  return { ...track, albumArtUri: cover };
+}
+
 /** Any navigable <container> child — a folder, album, artist bucket, etc. */
 function parseFolder(block: string, base: string): Folder | null {
   const id = attr(openTagOf(block, "container"), "id");
@@ -425,6 +481,8 @@ async function crawlContainer(
   seenTracks: Set<string>,
 ): Promise<{ id: string; title: string }[]> {
   const subs: { id: string; title: string }[] = [];
+  const found: SearchTrack[] = [];
+  const itemBlocks: string[] = [];
   for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
     const inner =
       `<ObjectID>${escapeXml(node.id)}</ObjectID>` +
@@ -442,15 +500,19 @@ async function crawlContainer(
       if (!SKIP_SUBTREE_TITLES.has(f.title.trim().toLowerCase())) subs.push({ id: f.id, title: f.title });
     }
     for (const b of blocks(didl, "item")) {
+      itemBlocks.push(b);
       const t = parseCrawlTrack(b, base, node);
-      if (!t) continue;
-      // UMS re-lists the same file across Media Library views — dedupe by id.
-      const key = t.id ?? `${node.id}:${t.title}`;
-      if (seenTracks.has(key)) continue;
-      seenTracks.add(key);
-      tracks.push(t);
+      if (t) found.push(t);
     }
     if (returned < PAGE_SIZE) break;
+  }
+  const cover = folderCoverArt(itemBlocks, base);
+  for (const t of cover ? found.map((f) => withCoverFallback(f, cover)) : found) {
+    // UMS re-lists the same file across Media Library views — dedupe by id.
+    const key = t.id ?? `${node.id}:${t.title}`;
+    if (seenTracks.has(key)) continue;
+    seenTracks.add(key);
+    tracks.push(t);
   }
   return subs;
 }
@@ -475,6 +537,7 @@ export async function searchLibrary(query: string): Promise<LibrarySearch> {
 export async function albumTracks(albumId: string): Promise<Track[]> {
   const cd = await getContentDirectory();
   const tracks: Track[] = [];
+  const itemBlocks: string[] = [];
   for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
     const inner =
       `<ObjectID>${escapeXml(albumId)}</ObjectID>` +
@@ -484,13 +547,14 @@ export async function albumTracks(albumId: string): Promise<Track[]> {
       `<RequestedCount>${PAGE_SIZE}</RequestedCount>` +
       `<SortCriteria></SortCriteria>`;
     const { didl, returned } = await soapCall("Browse", inner);
-    const found = blocks(didl, "item")
-      .map((b) => parseTrack(b, cd.base))
-      .filter((t): t is Track => t !== null);
+    const items = blocks(didl, "item");
+    itemBlocks.push(...items);
+    const found = items.map((b) => parseTrack(b, cd.base)).filter((t): t is Track => t !== null);
     tracks.push(...found);
     if (returned < PAGE_SIZE) break;
   }
-  return tracks;
+  const cover = folderCoverArt(itemBlocks, cd.base);
+  return cover ? tracks.map((t) => withCoverFallback(t, cover)) : tracks;
 }
 
 /**
@@ -504,6 +568,7 @@ export async function browseFolder(objectId: string): Promise<FolderListing> {
   const cd = await getContentDirectory();
   const folders: Folder[] = [];
   const tracks: FolderTrack[] = [];
+  const itemBlocks: string[] = [];
   for (let start = 0; start < MAX_RESULTS; start += PAGE_SIZE) {
     const inner =
       `<ObjectID>${escapeXml(objectId)}</ObjectID>` +
@@ -518,6 +583,7 @@ export async function browseFolder(objectId: string): Promise<FolderListing> {
       if (f) folders.push(f);
     }
     for (const b of blocks(didl, "item")) {
+      itemBlocks.push(b);
       const t = parseTrack(b, cd.base);
       if (t) {
         tracks.push({
@@ -531,7 +597,8 @@ export async function browseFolder(objectId: string): Promise<FolderListing> {
     }
     if (returned < PAGE_SIZE) break;
   }
-  return { folders, tracks };
+  const cover = folderCoverArt(itemBlocks, cd.base);
+  return { folders, tracks: cover ? tracks.map((t) => withCoverFallback(t, cover)) : tracks };
 }
 
 /** Escape a value placed in element text (object IDs can contain & < >). */
