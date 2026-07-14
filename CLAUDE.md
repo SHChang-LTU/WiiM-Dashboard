@@ -77,3 +77,13 @@ UPnP client for browsing a media server's folders/albums (`contentdirectory.ts`,
 Configure via `.env` (copy from `.env.example`). Key vars: `AUTH_SECRET` (required; keys sessions + CSRF), and `COOKIE_SECURE=false` for plain-http LAN dev — which also disables HSTS and the CSP `upgrade-insecure-requests` so scripts/styles load over http.
 
 Deploy is a multi-stage `Dockerfile` → Next.js standalone server. Native modules (`better-sqlite3`, `@node-rs/argon2`) are kept external and copied explicitly. The entrypoint fixes data-dir ownership (so a bind-mount works) then drops to non-root uid 1001 via `gosu`. SQLite + config persist in the `wiim-data` volume.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
